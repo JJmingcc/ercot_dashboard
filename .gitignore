@@ -4,6 +4,8 @@
 !.env.example
 .mtoken.json
 *mtoken*.json
+.streamlit/secrets.toml
+secrets.toml
 
 # Python
 dash_env/
