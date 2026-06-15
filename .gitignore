@@ -2,6 +2,8 @@
 .env
 *.env
 !.env.example
+.mtoken.json
+*mtoken*.json
 
 # Python
 dash_env/
@@ -12,10 +14,15 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 
-# Data (raw/cached pulls)
-data/
+# Data — ignore transient / refetchable caches: StormVista runs, forecast weather, the county
+# map (auto-downloads on first run), and demo files. The historical panels (data/history) and the
+# Uri study panel (data/uri2021) are NOT ignored — they're committed (~4 MB of ERCOT actuals +
+# ERA5) so the deployed Weather-normalized-history / Load-vs-temperature / Uri dashboards have data.
+data/stormvista/
+data/weather/
+data/us_counties_fips.json
+data/netload_demo.*
 *.duckdb
-*.parquet
 
 # OS / editor
 .DS_Store
