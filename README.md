@@ -3,13 +3,26 @@
 Dashboard for the ERCOT market using Meteologica forecast data. See
 `ercot-dashboard-plan.md` for the design and roadmap.
 
-## Setup
+## Quick start (one click)
 
 ```bash
-./setup.sh                          # creates dash_env/ and installs requirements
+./run.sh                            # set up (once) AND launch the dashboard → http://localhost:8501
+```
+
+`run.sh` is idempotent: it creates the `dash_env/` virtualenv if missing, installs the **app**
+dependencies (`requirements-app.txt` = base + Streamlit/Plotly/Shapely), bootstraps `.env` from
+`.env.example` on first run, then starts Streamlit. Use `PORT=8600 ./run.sh` for a different port.
+Fill in your real credentials in `.env` (Streamlit auto-reloads on save) — see **Credentials** below.
+
+## Setup (manual / dev)
+
+```bash
+./setup.sh                          # creates dash_env/ and installs the base requirements
 source dash_env/bin/activate        # always work inside dash_env
+pip install -r requirements-app.txt # add the dashboard deps (Streamlit/Plotly/Shapely)
 python -m src.meteologica_client    # smoke-test that credentials load (no network)
 python -m src.meteologica_client --login   # live auth check against the API
+streamlit run app/app.py            # run the dashboard manually
 ```
 
 The project environment is **`dash_env/`** (a local venv). Use that one

@@ -11,6 +11,7 @@ Hero = temperature map: pick a market (ERCOT/PJM/CAISO/SPP/MISO) and a view
 from __future__ import annotations
 
 import datetime as dt
+import os
 import pathlib
 import sys
 
@@ -23,13 +24,23 @@ import plotly.graph_objects as go  # noqa: E402
 import streamlit as st  # noqa: E402
 from plotly.subplots import make_subplots  # noqa: E402
 
+# Streamlit Community Cloud: copy app Secrets → environment variables so src/config.py's os.environ
+# reads work in the cloud (there's no .env file there). Local runs use .env via python-dotenv and are
+# unaffected (st.secrets raises when no secrets file exists → caught and skipped).
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str):
+            os.environ.setdefault(_k, _v)
+except Exception:
+    pass
+
 from src.geo import (  # noqa: E402
     assign_nearest_index, load_counties, market_counties, nearest_zone, subsample, zone_boundaries,
 )
 from src.netload import compute_dashboard_frame, implied_gas_burn_bcfd  # noqa: E402
 from src.historical import available_months  # noqa: E402
 from src.wxnorm import (  # noqa: E402
-    adj_r2, cv_resolution, diurnal, era_panel, lt_scatter, poly_fit, quantile_bands, response_by_cdd,
+    adj_r2, cv_resolution, era_panel, lt_scatter, poly_fit, quantile_bands, response_by_cdd,
     seg_fit, to_daily, wn_seasonal_curves)
 from src.storage import save_now_snapshot, snapshot_count  # noqa: E402
 from src.weather import (  # noqa: E402
@@ -586,9 +597,6 @@ if DASH == "🔋 Weather-normalized history":
         msel = cc[2].multiselect("Months", _AVAIL[y], default=_AVAIL[y], format_func=lambda m: MONTHS[m])
         entities = [(MONTHS[m], era_panel(y, (m,))) for m in msel]
     metric = cc[3].radio("Metric", ["Demand (GW)", "Net load (GW)"])
-    tbin = st.slider("Hold temperature at (°F)", 30, 102, 95, 2,
-                     help="Only hours near this temperature feed the diurnal/difference charts, so the "
-                          "periods are compared at the same weather (structural, not weather).")
     entities = [(lab, p) for lab, p in entities if not p.empty]
     if not entities:
         st.info("Select at least one period with cached data.")
@@ -729,32 +737,6 @@ if DASH == "🔋 Weather-normalized history":
         st.error(f"At **{res}** resolution the slope can't be fit out-of-sample — that *is* the honest "
                  "result (a window needs enough hot-and-mild days; a single day has none).")
 
-    diur = {lab: diurnal(p, valcol, tbin, tbin + 4).reindex(range(24)) for lab, p in entities}
-    fb = go.Figure()
-    for i, (lab, p) in enumerate(entities):
-        fb.add_trace(go.Scatter(x=diur[lab].index, y=scale(diur[lab]), name=lab,
-                                line=dict(color=COLORS[i % len(COLORS)], width=2.5)))
-    fb.add_vrect(x0=10.5, x1=16.5, fillcolor="rgba(255,170,0,0.10)", line_width=0,
-                 annotation_text="midday → solar", annotation_position="top left")
-    fb.add_vrect(x0=18.5, x1=21.5, fillcolor="rgba(140,80,255,0.12)", line_width=0,
-                 annotation_text="evening peak → battery", annotation_position="top right")
-    fb.update_layout(height=320, margin=dict(t=10, b=10), xaxis_title="hour of day (CPT)",
-                     yaxis_title=yt, legend=dict(orientation="h", y=1.02), hovermode="x unified")
-    st.markdown(f"**② Daily shape at ~{tbin}–{tbin+4}°F** — midday dip = solar; lower evening peak "
-                "= batteries (sun's down).")
-    st.plotly_chart(fb, use_container_width=True)
-
-    if len(entities) == 2:
-        (la, _), (lb, _) = entities
-        diff = scale(diur[lb]) - scale(diur[la])
-        fc = go.Figure(go.Bar(x=diff.index, y=diff.values,
-                              marker_color=["#9467bd" if 18 <= h <= 21 else "#2ca02c" for h in diff.index]))
-        fc.add_hline(y=0, line_color="#333")
-        fc.update_layout(height=240, margin=dict(t=10, b=10), xaxis_title="hour of day (CPT)",
-                         yaxis_title=f"Δ {yt} ({lb} − {la})", showlegend=False)
-        st.markdown(f"**③ Difference ({lb} − {la}), weather-normalized.** Below zero = less at the "
-                    "same weather · green = midday/other (solar), purple = evening peak (battery).")
-        st.plotly_chart(fc, use_container_width=True)
     st.caption("ERCOT zone-mean temperature · Meteologica observations + ERA5 · see `docs/concepts.md`. "
                "Add periods: `python -m src.backfill_history <years>`. (Gas burn lives on the 📡 Live "
                "monitor; this view focuses on the structural temperature → demand relationship.)")

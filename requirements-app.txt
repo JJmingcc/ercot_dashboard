@@ -1,5 +1,4 @@
 # App (Streamlit dashboard) dependencies.
+# Everything now lives in requirements.txt (so Streamlit Cloud, which installs that file,
+# gets the UI deps too); this is kept as a stable entry point for run.sh / docs.
 -r requirements.txt
-streamlit>=1.40
-plotly>=5.24
-shapely>=2.0

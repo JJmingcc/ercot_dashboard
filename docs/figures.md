@@ -80,16 +80,6 @@ one link. Concepts: [concepts.md](concepts.md) · data provenance: [data-sources
 - **Read → action:** OOS MAE ≈ **1 GW (~1.5%)** at season/month ⇒ trust the demand/burn forecast and size accordingly; **Week overfits, Daily can't fit** (flagged). The negative **bias** = the drift (a stale model under-predicts). The weekend term cuts OOS error only because it's validated out-of-sample — discipline that keeps the forecast honest.
 - **→ Use it to predict:** the fitted `a + b·CDD` (figure ①) **is** a demand forecaster — plug ③'s forecast CDD into the *latest* period's coefficients, attach this OOS MAE as the error bar. Full recipe, rules, and the *demand-not-net-load* caveat in [concepts.md §7](concepts.md#7-using-the-weatherdemand-fit-for-prediction).
 
-### ② Daily shape at a held temperature (diurnal)
-- **Shows:** hourly load shape by hour-of-day, within a held temperature bin, per period.
-- **Implies:** *The intraday structural change — solar (midday) and batteries (evening peak).*
-- **Read → action:** **midday dip = solar; lower evening peak = batteries.** At the same weather, a lower 2025 evening peak vs 2022 ⇒ batteries are shaving the peak ⇒ **smaller evening price spikes and less peaker burn** than the old relationship implies.
-
-### ③ Difference (period − period), weather-normalized
-- **Shows:** the hour-by-hour difference between two periods at the same held weather (green = midday/other, purple = evening peak).
-- **Implies:** *Exactly which hours changed structurally.*
-- **Read → action:** below zero = **less load/burn at the same weather** — green midday = solar's bite, purple evening = the battery bite. Quantifies the structural Δ (e.g. −1.5 Bcf/d at 98 °F) to adjust the seasonal NG bias.
-
 ---
 
 ## 📈 Load vs temperature — "the raw relationship" (historical scatter)

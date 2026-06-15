@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.41.0] - 2026-06-15
+### Added
+- **`run.sh` — one-click setup + launch.** Idempotent: creates the `dash_env` virtualenv if missing,
+  installs the **app** deps (`requirements-app.txt`, which the old `setup.sh` didn't — it only did the base
+  set), bootstraps `.env` from `.env.example` on first run, then starts Streamlit (`PORT` overridable).
+  README's Quick-start updated to use it.
+- **Streamlit Community Cloud readiness:** root `requirements.txt` now includes the UI deps
+  (`streamlit`/`plotly`/`shapely`) so the cloud build doesn't crash on `import plotly`
+  (`requirements-app.txt` → `-r requirements.txt`); and app startup copies **`st.secrets` → `os.environ`**
+  so `src/config.py`'s credential reads work in the cloud (no `.env` there). Local `.env` flow unchanged.
+### Removed
+- **Weather-normalized history:** dropped the **② Daily shape (diurnal, at a held temperature)** and
+  **③ Difference (period − period)** charts, plus the now-orphaned "Hold temperature at (°F)" slider and the
+  unused `diurnal` import. The dashboard keeps the temperature/demand panels and the weather→demand fit.
+  `app/app.py`; docs synced (`docs/figures.md`).
+
 ## [0.40.0] - 2026-06-14
 ### Added
 - **Per-zone multi-model demand.** The multi-model demand overlay gained a **Zone selector** (Whole ERCOT +
