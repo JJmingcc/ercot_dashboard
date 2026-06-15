@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ERCOT Weather → Gas Burn — Trading Workflow & Figure Reference</title>
+<style>
+  :root{
+    --bg:#0f1720; --panel:#fff; --ink:#1a2330; --muted:#5b6b7c; --line:#e3e8ef;
+    --accent:#2563eb; --built:#16a34a; --plan:#b45309; --bull:#dc2626; --bear:#2563eb;
+    --chip:#eef2f7; --warm:#d6604d; --cool:#4393c3;
+    --shadow:0 1px 3px rgba(16,24,40,.08),0 1px 2px rgba(16,24,40,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       color:var(--ink);background:#f4f6f9;-webkit-font-smoothing:antialiased}
+  code,.mono{font-family:"SF Mono",ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;font-size:.86em}
+  a{color:var(--accent);text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px 64px}
+
+  header{background:linear-gradient(135deg,#0f1720,#1b2a3c);color:#eaf0f7;padding:42px 0 34px;margin-bottom:30px}
+  header .wrap{padding-top:0}
+  header h1{margin:0 0 8px;font-size:30px;letter-spacing:-.2px}
+  header h1 .arrow{color:#7fb2ff}
+  header p{margin:0;color:#9fb3c8;max-width:780px}
+  .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+       padding:3px 9px;border-radius:999px;vertical-align:middle}
+  .tag.built{background:rgba(22,163,74,.16);color:#7ee2a8;border:1px solid rgba(22,163,74,.4)}
+  .tag.plan{background:rgba(180,83,9,.16);color:#f4c187;border:1px solid rgba(180,83,9,.4)}
+  /* source tags (dark text — used on white cards) */
+  .tag.sv{background:rgba(22,163,74,.14);color:#1a7f43;border:1px solid rgba(22,163,74,.4)}
+  .tag.met{background:rgba(37,99,235,.13);color:#1d4ed8;border:1px solid rgba(37,99,235,.4)}
+  .tag.om{background:rgba(13,148,136,.13);color:#0f766e;border:1px solid rgba(13,148,136,.4)}
+  .tag.eia{background:rgba(180,83,9,.13);color:#b45309;border:1px solid rgba(180,83,9,.4)}
+  .tag.ours{background:rgba(124,58,237,.13);color:#6d28d9;border:1px solid rgba(124,58,237,.4)}
+
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);
+     margin:42px 0 14px;font-weight:700}
+
+  /* flow pipeline */
+  .flow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  .flow .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 16px 14px;box-shadow:var(--shadow)}
+  .flow .box h3{margin:0 0 8px;font-size:14px}
+  .flow .box ul{margin:0;padding-left:18px;color:var(--muted)}
+  .flow .box li{margin:3px 0}
+  .flow .box li b{color:var(--ink);font-weight:600}
+  .flow .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--accent);font-weight:700;margin-bottom:6px}
+
+  /* dashboards */
+  .dash{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  .dash .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:var(--shadow)}
+  .dash .card h3{margin:0 0 4px;font-size:17px}
+  .dash .card .sub{color:var(--muted);font-size:13px;margin-bottom:10px}
+  .dash .card ol{margin:0;padding-left:20px}
+  .dash .card li{margin:5px 0}
+
+  /* steps + figure cards */
+  .step{display:flex;gap:16px;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        padding:18px 20px;margin-bottom:14px;box-shadow:var(--shadow)}
+  .step .n{flex:0 0 38px;height:38px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;
+           font-size:17px;display:flex;align-items:center;justify-content:center}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 8px;font-size:17px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .row{display:grid;grid-template-columns:84px 1fr;gap:6px 12px;margin:6px 0}
+  .row .k{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:700;padding-top:2px}
+  .row .v{color:var(--ink)}
+  .row .v.muted{color:var(--muted)}
+  .pill{display:inline-block;background:var(--chip);border:1px solid var(--line);border-radius:6px;
+        padding:1px 7px;margin:1px 2px 1px 0;font-size:12.5px}
+  .pill.id{font-family:"SF Mono",ui-monospace,monospace;font-size:11.5px}
+  .act{background:#f8fafc;border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:8px 12px;margin-top:8px}
+  .bull{color:var(--bull);font-weight:700}
+  .bear{color:var(--bear);font-weight:700}
+
+  /* figure reference */
+  .lead{color:var(--muted);margin:0 0 16px;max-width:860px}
+  .grp{font-size:16px;margin:24px 0 10px;color:var(--ink);display:flex;align-items:center;gap:8px}
+  .figs{display:grid;gap:12px}
+  .fig{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 18px;box-shadow:var(--shadow)}
+  .fig h3{margin:0 0 8px;font-size:15.5px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .fig .act{background:#fbfaff;border-left-color:#7c3aed}
+
+  .planned{background:var(--panel);border:1px dashed #d3a86a;border-radius:12px;padding:16px 20px;box-shadow:var(--shadow)}
+  .planned ul{margin:8px 0 0;padding-left:18px;color:var(--muted)}
+  .planned li b{color:var(--ink)}
+
+  .cheat{background:#0f1720;color:#dce6f2;border-radius:12px;padding:18px 22px;margin-top:26px;font-size:14.5px}
+  .cheat b{color:#fff}
+  .src{color:var(--muted);font-size:12.5px;margin-top:30px;border-top:1px solid var(--line);padding-top:14px}
+  @media(max-width:760px){.flow,.dash{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>ERCOT: Weather <span class="arrow">→</span> Net Load <span class="arrow">→</span> Gas Burn <span class="arrow">→</span> Price</h1>
+    <p>Daily trading workflow for the ERCOT weather‑driven fundamentals dashboard, plus a
+       <b>figure‑by‑figure reference</b> (input · output · how to read) for every panel on the site.
+       Each panel is <span class="tag built">built</span> and runs today. NG = natural gas.</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <h2>The flow — data to signal</h2>
+  <div class="flow">
+    <div class="box">
+      <div class="lbl">1 · Sources</div>
+      <h3>Where the data comes from</h3>
+      <ul>
+        <li><b>StormVista</b> <span class="tag built">built</span> — grid‑corrected temperature (city‑extraction) + load‑weighted degree days (CDD/HDD) + GEFS ensemble (paid)</li>
+        <li><b>Meteologica</b> <span class="tag built">built</span> — demand (system + by zone), wind, solar, net‑load band, battery (forecast + obs + ECMWF‑ENS)</li>
+        <li><b>Open‑Meteo</b> <span class="tag built">built</span> — ERA5 archive for the year‑over‑year lookback views (free)</li>
+        <li><b>EIA‑930</b> <span class="tag built">built</span> — actual hourly ERCOT gas generation (free key, ~13 h lag)</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="lbl">2 · Processing</div>
+      <h3>What we compute</h3>
+      <ul>
+        <li><b>net load</b> = demand − wind − solar</li>
+        <li><b>implied burn</b> = (net load − baseload) × heat rate → Bcf/d; <b>actual burn</b> = EIA gas × HR</li>
+        <li><b>anomaly</b> = forecast − 30‑yr normal; <b>ensemble band</b> = p10/p90 across members</li>
+        <li><b>weather→load fit</b> <span class="mono">a + b·DD</span>, validated out‑of‑sample (leave‑one‑out CV)</li>
+        <li><b>weather‑normalization</b> (hold temperature constant) to expose solar/battery drift</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="lbl">3 · Output</div>
+      <h3>Two dashboards</h3>
+      <ul>
+        <li><b>📡 Live monitor</b> — forward‑looking, 1–16 days</li>
+        <li><b>🔋 Weather‑normalized history</b> — structural drift, positioning</li>
+      </ul>
+      <p style="margin:10px 0 0;color:var(--muted)"><code>streamlit run app/app.py</code></p>
+    </div>
+  </div>
+
+  <h2>The three dashboards</h2>
+  <div class="dash">
+    <div class="card">
+      <h3>📡 Live monitor</h3>
+      <div class="sub">"What's coming" — the trading screen.</div>
+      <ol>
+        <li>① Temperature map (StormVista forecast + Open‑Meteo lookback)</li>
+        <li>🗺️ ERCOT forecast demand by zone (+ days × zone table)</li>
+        <li>③ ERCOT degree days (+ ③·a weather→load, ③·b hourly)</li>
+        <li>ERCOT net load forecast + ECMWF‑ENS fan</li>
+        <li>Implied gas burn — forecast + actual (EIA) + band</li>
+        <li>Demand decomposition</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>🔋 Weather‑normalized history</h3>
+      <div class="sub">"Is the grid drifting?" — positioning.</div>
+      <ol>
+        <li>Temperature box per period (the weather removed)</li>
+        <li>① Weather → demand: correlation & drift</li>
+        <li>🎯 Validation — backtest the model (out‑of‑sample CV)</li>
+        <li>② Daily shape — solar (midday) vs battery (evening)</li>
+        <li>③ Difference (when 2 periods)</li>
+      </ol>
+      <div class="sub" style="margin-top:8px">e.g. demand @DD=15 climbs <b>53.5 → 61.8 GW</b>, 2022 → 2025 (pure growth).</div>
+    </div>
+    <div class="card">
+      <h3>📈 Load vs temperature</h3>
+      <div class="sub">"The raw relationship" — exploratory scatter.</div>
+      <ol>
+        <li>ERCOT load vs temperature (°F) — continuous full‑year U</li>
+        <li>Resolution Hourly→Yearly; Zone: all / overlay / one</li>
+        <li>Fit + R², optional <b>P10–P90 quantile band</b></li>
+        <li>Per‑zone sensitivity map + table (1×2 beside it)</li>
+        <li><b>Weather‑normalized load growth</b> — curve per year</li>
+      </ol>
+      <div class="sub" style="margin-top:8px">The U, the <b>up</b> drift (+19 % 2022→25), and which zones the heat bites.</div>
+    </div>
+  </div>
+
+  <!-- ============================ FIGURE REFERENCE ============================ -->
+  <h2>Figure‑by‑figure reference — input · output · how to read</h2>
+  <p class="lead">Every panel on the site, in screen order (top → bottom). Source tags:
+     <span class="tag sv">StormVista</span> <span class="tag met">Meteologica</span>
+     <span class="tag om">Open‑Meteo</span> <span class="tag eia">EIA‑930</span>
+     <span class="tag ours">computed here</span>. The whole site is one chain:
+     <span class="mono">weather → demand → net load → gas burn → price</span>; each figure is one link.</p>
+
+  <h3 class="grp">📡 Live monitor — forward‑looking</h3>
+  <div class="figs">
+
+    <div class="fig">
+      <h3>① Temperature anomaly map <span class="tag sv">StormVista</span> <span class="tag om">Open‑Meteo</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v"><b>Forecast views</b> (High °, Low °, Anomaly): StormVista GFS <span class="pill id">city‑extraction/corrected‑max‑min</span> → per‑station daily high/low (°F); each county takes its <b>nearest station</b>; anomaly = forecast high − the <b>30‑yr ERA5 normal</b>. <b>Lookback views</b> (vs Yesterday … vs 1 yr, vs 10‑yr normal): Open‑Meteo — now = GFS Seamless, reference = <span class="pill">ERA5 archive</span>.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Per‑county Texas choropleth + per‑zone (county‑mean) table. A <b>Forecast‑day slider</b> (1–16) on the forecast views; red = warmer, blue = cooler.</div></div>
+      <div class="act"><b>Read:</b> a big <span class="bull">+anomaly</span> over a load‑heavy zone in summer (Coast/Houston, North‑Central/DFW) ⇒ AC surge ⇒ flag for burn. Winter <span class="bear">−anomaly</span> ⇒ heating + freeze‑off risk. The <i>vs‑normal</i> view is the <b>demand surprise</b> the market may not have priced. <span class="mono">Caveat: station‑resolution — neighbouring counties share one station.</span></div>
+    </div>
+
+    <div class="fig">
+      <h3>🗺️ ERCOT forecast demand by zone <span class="tag met">Meteologica</span> <span class="tag ours">aggregate</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v">Meteologica's published <b>hourly demand forecast (MW)</b> for each of the 8 ERCOT weather zones (already weather‑driven by <i>their</i> internal model). <span class="pill id">PowerDemand/Forecast/&lt;zone&gt;/Total/Hourly</span></div></div>
+      <div class="row"><div class="k">Compute</div><div class="v">Pick a forecast day → that day's <b>peak (max)</b> or <b>mean</b> → ÷1000 → GW. <i>No model on our side</i> — pure slice + aggregate.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Texas choropleth, each zone block coloured/labelled by GW + a <b>forecast‑days × zone heatmap table</b> (whole horizon at once). Forecast‑day slider + Peak/Mean toggle.</div></div>
+      <div class="act"><b>Read:</b> North‑Central (DFW ~25 GW) + Coast (Houston ~21 GW) dominate; total ≈ ERCOT peak. Slide the day to watch it evolve. Pairs with ①: <i>map = where it's hot, this = where that heat becomes load.</i></div>
+    </div>
+
+    <div class="fig">
+      <h3>③ ERCOT degree days — demand‑weather <span class="tag sv">StormVista</span> <span class="tag ours">band + anomaly</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v">StormVista <b>population‑weighted ERCOT</b> WDD — four files: deterministic <b>GFS forecast</b>, <b>GEFS members</b>, recent <b>actuals</b>, <b>30‑yr normal</b>. CDD = max(T̄−65,0) cooling; HDD = max(65−T̄,0) heating.</div></div>
+      <div class="row"><div class="k">Compute</div><div class="v"><b>p10/p90 band</b> = quantiles across members; <b>anomaly</b> = forecast − normal (subtraction). Degree days themselves are pre‑computed by StormVista.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Forecast CDD/HDD line + <b>GEFS p10–p90 band</b> + dashed <b>30‑yr normal</b> + green recent <b>actuals</b>; metrics (next‑day level, anomaly, ensemble spread); look‑ahead slider.</div></div>
+      <div class="act"><b>Read:</b> the gap to the dashed normal <i>is</i> the anomaly — above normal ⇒ more demand ⇒ <span class="bull">bullish power/gas burn</span>; a wide band ⇒ low confidence, <b>size down</b>. CDD = summer AC, HDD = winter heating (toggle to the in‑season one). A <i>pure‑weather</i> signal — no growth/renewables baked in.</div>
+    </div>
+
+    <div class="fig">
+      <h3>③·a Weather → load <span class="tag sv">StormVista</span> <span class="tag met">Meteologica</span> <span class="tag ours">OLS</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v"><b>X</b> = StormVista load‑weighted CDD/HDD <i>or</i> absolute high °F (toggle). <b>Y</b> = Meteologica daily‑mean <b>demand</b> & <b>net load</b> (GW). One point = one forecast day in the look‑ahead window.</div></div>
+      <div class="row"><div class="k">Compute</div><div class="v">Daily‑mean the load (drop &lt;24 h days), inner‑join by date, fit each series by OLS: slope <span class="mono">s = cov(y,x)/var(x)</span> → GW per degree.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Scatter: two point‑clouds + two dotted fit lines, each labelled with its slope (e.g. <span class="mono">demand +0.85 GW/CDD</span>, <span class="mono">net load +0.12</span>).</div></div>
+      <div class="act"><b>Read:</b> demand tracks weather cleanly (steep +slope); <b>net load is decoupled</b> (flat slope) because wind+solar swing it — <i>the vertical gap between the clouds is renewable generation.</i> A hot day ⇒ high burn <b>only if it's also calm/cloudy</b>. Watch degree days <b>and</b> renewables together.</div>
+    </div>
+
+    <div class="fig">
+      <h3>③·b Hourly / sub‑daily <span class="tag sv">StormVista</span> <span class="tag met">Meteologica</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v">StormVista <b>3‑hourly</b> station temperature (°F) — load‑weighted ERCOT average or a single city (Houston/Dallas/…); Meteologica <b>hourly net load</b> (GW, whole system).</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Dual‑axis chart: temperature (left °F, red solid) vs net load (right GW, blue dotted). A <b>Focus‑day selector</b> zooms to one forecast day's intraday shape; station multiselect.</div></div>
+      <div class="act"><b>Read:</b> temperature peaks mid‑afternoon; <b>net load ramps into the evening as solar fades</b> — that evening window is where peaker burn and price spikes live. Pick Houston/Dallas to see a city's own swing.</div>
+    </div>
+
+    <div class="fig">
+      <h3>ERCOT net load forecast (demand − wind − solar) <span class="tag met">Meteologica</span> <span class="tag ours">net load</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v">Meteologica system demand, wind, PV (+ ECMWF‑ENS members). <span class="mono">net load = demand − wind − solar</span>.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Net‑load line + <b>ECMWF‑ENS p10–p90 fan</b> + p50; metrics (current/peak net load, peak renewables, peak p50).</div></div>
+      <div class="act"><b>Read:</b> high peak + steep evening ramp ⇒ <b>tight system</b> ⇒ ancillary / peak‑price risk. A wide, high <b>P90</b> ⇒ spike risk ⇒ <span class="bull">long power / long volatility</span> (convex payoff). This sets the marginal unit and price.</div>
+    </div>
+
+    <div class="fig">
+      <h3>Implied power‑sector gas burn <span class="tag met">Meteologica</span> <span class="tag eia">EIA‑930</span> <span class="tag ours">burn proxy</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v"><b>Forecast burn</b> = (net load − must‑run baseload) × heat rate → Bcf/d (sliders for HR & baseload); <b>actual burn</b> = EIA‑930 ERCOT gas generation × heat rate (measured, no baseload). + ENS band.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Forecast burn (brown) + actual EIA burn (green) + ENS band + max‑ramp metric.</div></div>
+      <div class="act"><b>Read:</b> forecast burn <span class="bull">&gt; market consensus ⇒ long NG &amp; power</span>; <span class="bear">&lt; ⇒ short</span>. Green persistently above brown ⇒ your proxy is low (raise baseload/HR, or trust EIA). The calibration check on the whole chain.</div>
+    </div>
+
+    <div class="fig">
+      <h3>Demand decomposition (net load + wind + solar = demand) <span class="tag met">Meteologica</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v">Meteologica net load, wind, solar — the additive stack that sums to total demand.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Stacked area: net load + wind + solar.</div></div>
+      <div class="act"><b>Read:</b> is high net load from high <b>demand</b>, or from <b>low renewables</b>? High renewable share ⇒ less burn (<span class="bear">bearish NG</span>); low wind/solar on a hot day ⇒ net load & burn spike (<span class="bull">bullish</span>). Tells you <i>why</i> net load is where it is.</div>
+    </div>
+
+  </div>
+
+  <h3 class="grp">🔋 Weather‑normalized history — positioning</h3>
+  <div class="figs">
+
+    <div class="fig">
+      <h3>Temperature box (per period) <span class="tag met">Meteologica</span> <span class="tag om">ERA5</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v">Daily temperature for each selected period (years or months).</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Box plot — median / quartiles / mean ◇ per period.</div></div>
+      <div class="act"><b>Read:</b> confirms the periods you're comparing actually had <i>different</i> weather — the confound the curves below strip out, leaving only structure.</div>
+    </div>
+
+    <div class="fig">
+      <h3>① Weather → demand: correlation & drift <span class="tag met">Meteologica</span> <span class="tag sv">degree days</span> <span class="tag ours">fit</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v">Daily <b>demand or net load</b> vs <b>CDD/HDD</b>, per period (years/months). Fit one line <span class="mono">a + b·DD</span> per period.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Scatter (dots = binned means, dotted = fit) + coefficient table: <b>r</b>, baseline <b>a</b>, slope <b>b</b> (GW/°day), value <b>@DD=15</b>.</div></div>
+      <div class="act"><b>Read:</b> <b>r ≈ 0.9</b> ⇒ weather almost fully explains demand. The <b>@DD=15</b> column = demand at <i>identical</i> weather; its climb (53.5 → 61.8 GW, 2022→25) is <b>pure structural growth</b> (data centres / electrification), not weather. <span class="bull">Recalibrate seasonal burn to today's level or you'll be structurally too short NG.</span></div>
+    </div>
+
+    <div class="fig">
+      <h3>🎯 Validation — backtest the model <span class="tag ours">out‑of‑sample CV</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v">Pooled daily demand vs DD; a <b>resolution toggle</b> (Season / Month / Week / Daily) + optional <b>weekday/weekend split</b>.</div></div>
+      <div class="row"><div class="k">Compute</div><div class="v"><b>Leave‑one‑out CV</b> (numpy least‑squares) — every point predicted out‑of‑sample so a finer resolution can't win by memorising.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">OOS MAE / bias / R², overfit gap, weekend effect, the <b>train/test sizes</b>, and a predicted‑vs‑actual scatter.</div></div>
+      <div class="act"><b>Read:</b> OOS MAE ≈ <b>1 GW (~1.5%)</b> at season/month ⇒ trust the demand/burn forecast and size accordingly; <b>Week overfits, Daily can't fit</b> (flagged honestly). The negative <b>bias</b> = the drift — a stale model under‑predicts. The weekend term only helps because it survives OOS.</div>
+    </div>
+
+    <div class="fig">
+      <h3>② Daily shape at a held temperature (diurnal) <span class="tag met">Meteologica</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v">Hourly load by hour‑of‑day, within a <b>held temperature bin</b>, per period.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">24‑hour load‑shape curve per period.</div></div>
+      <div class="act"><b>Read:</b> at the <i>same weather</i>, <b>midday dip = solar</b>, <b>lower evening peak = batteries</b>. A lower 2025 evening peak vs 2022 ⇒ batteries shaving the peak ⇒ smaller evening spikes & less peaker burn than the old relationship implies.</div>
+    </div>
+
+    <div class="fig">
+      <h3>③ Difference (period − period), weather‑normalized <span class="tag met">Meteologica</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v">Two periods' diurnal shapes at the <b>same held weather</b>.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Hour‑by‑hour difference curve (green = midday/other, purple = evening peak).</div></div>
+      <div class="act"><b>Read:</b> below zero = <b>less load/burn at the same weather</b> — green midday = solar's bite, purple evening = the battery bite. Quantifies the structural Δ (e.g. −1.5 Bcf/d at 98 °F) to adjust the seasonal NG bias.</div>
+    </div>
+
+  </div>
+
+  <h3 class="grp">📈 Load vs temperature — the raw relationship</h3>
+  <div class="figs">
+
+    <div class="fig">
+      <h3>ERCOT load vs temperature scatter <span class="tag met">Meteologica</span> <span class="tag om">ERA5</span> <span class="tag ours">poly fit</span></h3>
+      <div class="row"><div class="k">Input</div><div class="v">Cached hourly history (2022–2025, summer + winter): ERCOT <b>load</b> (demand or net load) and <b>temperature</b> (°F). A <b>Zone</b> selector (Whole ERCOT / overlay all 8 / one of the 8 weather zones) — per zone it uses that zone's own observed demand + ERA5 temp. A <b>Resolution</b> selector (Hourly … Yearly) sets the bucket; each point = its mean.</div></div>
+      <div class="row"><div class="k">Compute</div><div class="v"><b>Least‑squares polynomial</b> fit (Quadratic default, Linear optional) → a smooth regression curve + R². Per‑year or per‑zone curves; WebGL for the dense hourly/overlay views.</div></div>
+      <div class="row"><div class="k">Output</div><div class="v">Scatter of load vs temperature, coloured by <b>Year / Month / Zone</b>, with the fit curve(s) + an optional <b>P10–P90 quantile band</b>; a <b>per-zone sensitivity map + table</b> beside it (Texas choropleth by cooling GW/°F); a <b>Full-year vs Year-to-date</b> comparison (clip every year to the newest year's window so a partial year compares fairly — +22 % @55 °F 2022→26); a <b>per-zone load time series</b> (TradingView-style, selectable interval, multi-zone tags); and a <b>weather-normalized load-growth</b> curve (each year's demand at normal weather — gap = structural growth, +19 % system-wide / <b>+58 % Far West</b> 2022→25; per-zone, Quadratic or degree-day method). <b>Data:</b> Meteologica observed demand + ERA5 temperature (see data-sources.md §9).</div></div>
+      <div class="act"><b>Read:</b> the cloud is a <b>U / hockey‑stick</b> — load up at the <b>cold</b> end (heating) and the <b>hot</b> end (cooling), trough near <b>65 °F</b> (so the fit is quadratic — linear R²≈0.44 vs 0.94). <b>Colour by Year</b> → the curve shifts <b>up</b> = structural growth (same temp, more load). <b>Overlay the zones</b> → AC‑heavy North Central/Coast have steep cooling arms (~+0.3 GW/°F) while Far West is flat (≈0, industrial) — <i>where</i> heat becomes load. <b>Net load</b> (whole‑ERCOT) flattens it — renewables decouple it. Raw companion to the 🔋 dashboard's quantified drift.</div>
+    </div>
+
+  </div>
+
+  <!-- ============================ DAILY WORKFLOW ============================ -->
+  <h2>Daily workflow — 📡 Live monitor, market = ERCOT, top → bottom</h2>
+
+  <div class="step">
+    <div class="n">1</div>
+    <div class="body">
+      <h3>Is a weather event building? <span class="tag built">built</span></h3>
+      <div class="row"><div class="k">Panel</div><div class="v">① Temperature map (forecast = StormVista High/Low/Anomaly) + ③ ERCOT degree days (the anomaly vs the 30‑yr normal)</div></div>
+      <div class="row"><div class="k">Data</div><div class="v">StormVista <span class="pill id">gfs city‑extraction</span> + <span class="pill id">pw_cdd / pw_hdd</span>, load‑weighted · 254 TX counties → 8 zones</div></div>
+      <div class="row"><div class="k">Check</div><div class="v">Anomaly in load‑heavy zones: <span class="pill">Coast / Houston</span> <span class="pill">North Central / DFW</span> <span class="pill">South Central / Austin‑SA</span></div></div>
+      <div class="act">Summer <span class="bull">+anomaly</span> ⇒ AC demand surge (flag for burn). Winter <span class="bear">−anomaly</span> ⇒ heating surge + gas freeze‑off risk.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="n">2</div>
+    <div class="body">
+      <h3>How confident is the forecast? <span class="tag built">built</span></h3>
+      <div class="row"><div class="k">Panel</div><div class="v">③ degree‑day <b>GEFS p10–p90 band</b> + the net‑load <b>ECMWF‑ENS fan</b> (step 5)</div></div>
+      <div class="row"><div class="k">Data</div><div class="v">StormVista <span class="pill id">gfs‑ens</span> members → ERCOT WDD p10/p90 · Meteologica ECMWF‑ENS net‑load members</div></div>
+      <div class="row"><div class="k">Check</div><div class="v">the "ensemble spread (next day)" metric + the band width</div></div>
+      <div class="act">Narrow band ⇒ <span class="bull">conviction, size up</span>. Wide band / a model flip‑flopping ⇒ hedge / wait.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="n">3</div>
+    <div class="body">
+      <h3>How much load must gas serve? <span class="tag built">built</span></h3>
+      <div class="row"><div class="k">Panel</div><div class="v">ERCOT net load forecast — net load + ECMWF‑ENS fan; peak + ramp metrics</div></div>
+      <div class="row"><div class="k">Data</div><div class="v">Meteologica — Demand, Wind, PV · <span class="mono">net load = demand − wind − solar</span></div></div>
+      <div class="row"><div class="k">Check</div><div class="v">peak net load + the <b>evening ramp</b> (solar drop‑off); band width = uncertainty</div></div>
+      <div class="act">High peak + steep ramp ⇒ tight system ⇒ ancillary / peak‑price risk.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="n">4</div>
+    <div class="body">
+      <h3>Gas demand — forecast vs actual <span class="tag built">built</span></h3>
+      <div class="row"><div class="k">Panel</div><div class="v">Implied gas burn — <b style="color:#7f3b08">brown = forecast</b>, <b style="color:#16a34a">green = actual EIA‑930</b>, ENS band</div></div>
+      <div class="row"><div class="k">Data</div><div class="v">forecast = (net load − baseload) × heat rate; actual = <span class="pill">EIA‑930</span> <span class="pill id">ERCO · NG</span> × heat rate (no baseload assumption, ~13 h lag)</div></div>
+      <div class="row"><div class="k">Check</div><div class="v">forecast peak burn vs the <b>NG forward / consensus</b>; is green vs brown biased lately?</div></div>
+      <div class="act">Forecast burn <span class="bull">&gt; market ⇒ long NG &amp; power</span>; <span class="bear">&lt; market ⇒ short</span>. Green persistently above brown ⇒ proxy too low (raise baseload/HR, or trust EIA).</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="n">5</div>
+    <div class="body">
+      <h3>Spike / tail risk <span class="tag built">built</span></h3>
+      <div class="row"><div class="k">Panel</div><div class="v">the net‑load fan (step 3) + gas‑burn band (step 4)</div></div>
+      <div class="row"><div class="k">Data</div><div class="v">ECMWF‑ENS members → member‑wise net load → <span class="pill">p10 / p50 / p90</span></div></div>
+      <div class="row"><div class="k">Check</div><div class="v">how high / wide is <b>P90</b> vs p50</div></div>
+      <div class="act">High, wide P90 ⇒ price‑spike risk ⇒ <span class="bull">long power / long volatility</span> (convex payoff).</div>
+    </div>
+  </div>
+
+  <h2>Weekly · seasonal positioning</h2>
+  <div class="step">
+    <div class="n" style="background:#7c3aed">🔋</div>
+    <div class="body">
+      <h3>Weather‑normalized history <span class="tag built">built</span></h3>
+      <div class="row"><div class="k">Use</div><div class="v">Confirm the demand‑per‑degree relationship and watch the <b>@DD=15 drift</b> (growth up; evening peak down from solar + batteries) — so you don't carry a structurally wrong NG bias for the same weather. The 🎯 backtest tells you how far to trust the fit.</div></div>
+      <div class="row"><div class="k">Data</div><div class="v">Meteologica observations (2022 →) + StormVista degree days + ERA5; compare any years/months.</div></div>
+    </div>
+  </div>
+
+  <h2>Not on the screen yet</h2>
+  <div class="planned">
+    <span class="tag plan">planned</span> — so you don't go looking for them:
+    <ul>
+      <li><b>Run‑over‑run revision</b> — the highest‑alpha signal: trade the <i>change</i> between model runs before the market reprices. Needs vintaged runs (Meteologica <code>/updates</code> or StormVista archived runs).</li>
+      <li><b>Spark spread</b> — closes the loop to the price you trade (needs a gas‑price input + Meteologica DAM price + ERCOT hub).</li>
+      <li><b>Forecast‑vs‑actual skill score</b>, full <b>EIA fuel mix</b> (real must‑run baseload), EIA history back to <b>2018</b>.</li>
+      <li><b>ECMWF‑EPS degree days</b> — StormVista's EPS ensemble alongside GEFS for a second independent spike‑probability read.</li>
+    </ul>
+  </div>
+
+  <div class="cheat">
+    <b>Cheat‑sheet:</b> Map = is it hot/anomalous &amp; where? · Demand map = where's the load? · Degree days = how much demand‑weather (vs normal)? ·
+    Weather→load = will renewables eat it? · Net load/burn = how much gas demand? · Actual vs forecast = is the model right? ·
+    History ①/🎯/②/③ = is the grid structurally drifting, and is my model trustworthy?
+  </div>
+
+  <p class="src">Sources: StormVista (grid‑corrected temps + weighted degree days + GEFS) · Meteologica "API markets" · Open‑Meteo (ERA5 archive) · EIA‑930.
+     Full detail in <code>docs/figures.md</code>, <code>docs/concepts.md</code>, <code>docs/data-sources.md</code>, <code>docs/usage.md</code>.
+     Every panel here is <span class="tag built">built</span> and runs today; <span class="tag plan">planned</span> items are on the roadmap.</p>
+</div>
+</body>
+</html>
