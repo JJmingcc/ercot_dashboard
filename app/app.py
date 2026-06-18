@@ -54,7 +54,7 @@ VIEWS = list(LOOKBACKS) + [CLIM_VIEW]
 DISPLAY_TZ = "America/Chicago"
 
 
-def style_fig(fig: go.Figure, title: str | None = None, *, title_size: int = 19,
+def style_fig(fig: go.Figure, title: str | None = None, *, title_size: int = 22,
               legend_size: int = 14, base_size: int = 14, axis_title_size: int = 17) -> go.Figure:
     """Center + enlarge the chart title and legend, enlarge the x/y axis titles, and bump the base
     font, so every figure reads cleanly (esp. in dark mode). Applied *after* a figure's own
@@ -436,6 +436,19 @@ DIVERGING = [[0.0, "#2166ac"], [0.15, "#4393c3"], [0.35, "#92c5de"], [0.5, "#f7f
              [0.65, "#f4a582"], [0.85, "#d6604d"], [1.0, "#b2182b"]]
 
 
+def _zone_city_labels(cdf: pd.DataFrame, zones: dict, unit: str, valcol: str = "value") -> list:
+    """Map labels 'City<br><temp>°' — the city of each zone (from the zones table) + that zone's mean
+    `valcol` in cdf (the temperature of that city). Falls back to the city name alone with no value."""
+    zmean = (cdf.groupby("zone")[valcol].mean()
+             if ("zone" in cdf.columns and valcol in cdf.columns) else pd.Series(dtype=float))
+    out = []
+    for z, v in zones.items():
+        city = v[2] if len(v) > 2 else z
+        t = zmean.get(z)
+        out.append(f"{city}<br>{t:.0f}{unit}" if (t is not None and t == t) else city)
+    return out
+
+
 def build_map(cdf: pd.DataFrame, meta: dict, market: str) -> go.Figure:
     unit, mode = meta["unit"], meta["mode"]
     counties = counties_geojson()
@@ -462,9 +475,10 @@ def build_map(cdf: pd.DataFrame, meta: dict, market: str) -> go.Figure:
     fig.add_trace(go.Scattergeo(lat=olats, lon=olons, mode="lines",
                   line=dict(width=1.8, color="#000"), hoverinfo="skip", showlegend=False))
     zs = MARKETS[market]["zones"]
+    labels = _zone_city_labels(cdf, zs, unit, "now" if mode == "diff" else "value")
     fig.add_trace(go.Scattergeo(
-        lat=[v[0] for v in zs.values()], lon=[v[1] for v in zs.values()], text=list(zs.keys()),
-        mode="text", textfont=dict(size=12, color="#000", family="Arial Black"),
+        lat=[v[0] for v in zs.values()], lon=[v[1] for v in zs.values()], text=labels,
+        mode="text", textfont=dict(size=10, color="#000", family="Arial Black"),
         hoverinfo="skip", showlegend=False))
     fig.update_geos(
         scope="usa", resolution=110, showsubunits=True, subunitcolor="#000", subunitwidth=1.1,
@@ -1298,7 +1312,7 @@ if DASH == "📈 Load vs temperature":
                                                 title_text="Year", itemsizing="constant"))
                 psfig.update_xaxes(title_text="°F", row=2)
                 psfig.update_yaxes(title_text="GW", col=1)
-                psfig.update_annotations(font_size=15)       # enlarge the per-zone subplot titles
+                psfig.update_annotations(font_size=18)       # enlarge the per-zone subplot titles
                 st.plotly_chart(style_fig(psfig, legend_size=16), use_container_width=True)
                 r2_df = pd.DataFrame(r2_rows).T.reindex(ZONES).reindex(columns=sorted(ps_years))
                 cmp_df = (pd.DataFrame(fit_cmp).T.reindex(ZONES)
@@ -1380,7 +1394,7 @@ if DASH == "📈 Load vs temperature":
                      "(standalone: independent period & hour filters)", expanded=True):
         st.caption("**Standalone controls** — own year / month / hour filters, decoupled from the "
                    "scatter. Slope = GW of demand per +1 °F.")
-        zsc = st.columns([1.2, 1.2, 1.6])
+        zsc = st.columns([1.1, 1.1, 1.3, 1.5])
         map_metric = zsc[0].selectbox("Map", ["Cooling", "Heating", "Mean demand"],
                                       key="zone_sens_metric", help="Colour the zones by cooling "
                                       "sensitivity (summer AC — the headline), heating sensitivity "
@@ -1388,7 +1402,10 @@ if DASH == "📈 Load vs temperature":
         sens_res = zsc[1].selectbox("Resolution", ["Hourly", "Daily", "Weekly", "Monthly", "Yearly"],
                                     index=1, key="zone_sens_res", help="Point aggregation for the per-zone "
                                     "response. Coarse (Monthly/Yearly) may be unfittable → blank.")
-        zs_years = zsc[2].multiselect("Years", yrs, default=yrs, key="zs_years",
+        zs_focus = zsc[2].selectbox("Focus zone", ["All zones"] + ZONES, key="zs_focus",
+                                    help="Pick one zone to read its **city + sensitivity detail** below the "
+                                    "map (mean demand, cooling/heating slope + R²); 'All zones' = full map.")
+        zs_years = zsc[3].multiselect("Years", yrs, default=yrs, key="zs_years",
                                       help="Independent year pool for this map — does NOT follow the "
                                       "scatter's Years selector.")
         zs_all_m = (sorted(set().union(*[set(_AVAIL[y]) for y in zs_years])) if zs_years
@@ -1433,6 +1450,19 @@ if DASH == "📈 Load vs temperature":
                                     f"{map_metric} sensitivity" if is_sens else map_metric,
                                     colorbar_title=unit, unit=unit, value_fmt=vfmt, height=470)),
                                     use_container_width=True)
+                if zs_focus != "All zones" and zs_focus in ztab.index:   # single-zone detail readout
+                    row = ztab.loc[zs_focus]
+                    city = MARKETS["ERCOT"]["zones"].get(zs_focus, (0, 0, ""))[2]
+                    st.markdown(f"**📍 {zs_focus} zone — {city}** · {zs_mo_txt} · {zs_hr_txt}")
+                    fm = st.columns(4)
+                    fm[0].metric("Mean demand", f"{row['Mean GW']:.1f} GW" if pd.notna(row['Mean GW']) else "—")
+                    fm[1].metric("Cooling ≥70°F",
+                                 f"{row['Cool GW/°F']:+.2f} GW/°F" if pd.notna(row['Cool GW/°F']) else "—",
+                                 help=f"R² {row['Cool R²']:.2f}" if pd.notna(row['Cool R²']) else "R² n/a")
+                    fm[2].metric("Heating ≤55°F",
+                                 f"{row['Heat GW/°F']:.2f} GW/°F" if pd.notna(row['Heat GW/°F']) else "—",
+                                 help=f"R² {row['Heat R²']:.2f}" if pd.notna(row['Heat R²']) else "R² n/a")
+                    fm[3].metric("Cooling R²", f"{row['Cool R²']:.2f}" if pd.notna(row['Cool R²']) else "—")
 
     # ===================== BOTTOM · 📊 Fitting statistics (all tables, clearly labeled) =====================
     st.divider()
@@ -1552,8 +1582,9 @@ def build_sv_map(cdf: pd.DataFrame, view: str, unit: str, market: str) -> go.Fig
     fig.add_trace(go.Scattergeo(lat=olats, lon=olons, mode="lines",
                   line=dict(width=1.6, color="#000"), hoverinfo="skip", showlegend=False))
     zs = MARKETS[market]["zones"]
+    labels = _zone_city_labels(cdf, zs, unit, "value")
     fig.add_trace(go.Scattergeo(lat=[v[0] for v in zs.values()], lon=[v[1] for v in zs.values()],
-                  text=list(zs.keys()), mode="text", textfont=dict(size=11, color="#000", family="Arial Black"),
+                  text=labels, mode="text", textfont=dict(size=10, color="#000", family="Arial Black"),
                   hoverinfo="skip", showlegend=False))
     fig.update_geos(scope="usa", resolution=110, showsubunits=True, subunitcolor="#000",
                     subunitwidth=1.0, showcountries=True, countrycolor="#000",
