@@ -53,6 +53,30 @@ VIEWS = list(LOOKBACKS) + [CLIM_VIEW]
 
 DISPLAY_TZ = "America/Chicago"
 
+
+def style_fig(fig: go.Figure, title: str | None = None, *, title_size: int = 19,
+              legend_size: int = 14, base_size: int = 14, axis_title_size: int = 17) -> go.Figure:
+    """Center + enlarge the chart title and legend, enlarge the x/y axis titles, and bump the base
+    font, so every figure reads cleanly (esp. in dark mode). Applied *after* a figure's own
+    update_layout so it overrides both the figure defaults and Streamlit's injected plotly theme.
+    update_layout MERGES nested layout objects, so an existing legend orientation/y is preserved —
+    only x/xanchor/font are changed.
+
+    Pass `title` to set a centered title; if omitted, an existing title is just re-centered/enlarged.
+    """
+    fig.update_layout(font=dict(size=base_size),
+                      legend=dict(x=0.5, xanchor="center", font=dict(size=legend_size)))
+    fig.update_xaxes(title_font_size=axis_title_size)        # larger x/y axis labels
+    fig.update_yaxes(title_font_size=axis_title_size)
+    has_title = title is not None or (fig.layout.title is not None and fig.layout.title.text)
+    if has_title:
+        td: dict = dict(x=0.5, xanchor="center", font=dict(size=title_size))
+        if title is not None:
+            td["text"] = title
+        fig.update_layout(title=td)
+    return fig
+
+
 st.set_page_config(page_title="Weather & Net-Load Monitor", layout="wide",
                    initial_sidebar_state="collapsed")
 
@@ -312,7 +336,7 @@ def render_uri_panel():
     fig.update_layout(height=460, margin=dict(t=20, b=10), yaxis_title="ERCOT demand (GW)",
                       yaxis2=dict(title="temp (°F)", overlaying="y", side="right", color="#4393c3",
                                   showgrid=False), legend=dict(orientation="h", y=1.04), hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(style_fig(fig), use_container_width=True)
     storm = (ud.index >= uri.CURTAIL_START) & (ud.index < uri.CURTAIL_END)   # (2) demand-vs-temp analog
     uds, solid, extr = ud[storm], curve[~curve["extrapolated"]], curve[curve["extrapolated"]]
     ts = go.Figure()
@@ -330,16 +354,12 @@ def render_uri_panel():
     ts.update_layout(height=420, margin=dict(t=30, b=10), title="Demand vs temperature — analog reference",
                      xaxis_title="ERCOT temperature (°F)", yaxis_title="daily-mean demand (GW)",
                      legend=dict(orientation="h", y=1.02), hovermode="closest")
-    st.plotly_chart(ts, use_container_width=True)
+    st.plotly_chart(style_fig(ts), use_container_width=True)
     st.caption(
-        f"**Top:** the storm week — observed (collapses during blackouts) vs **latent** (no curtailment, "
-        f"peaks ~{s['peak_latent']:.0f} GW; gap to observed = **unserved load ~{s['max_unserved']:.0f} "
-        f"GW**) vs **no-storm** (~{s['nostorm_peak']:.0f} GW). **Bottom — the analog tool:** the "
-        "demand↔temperature curve from un-curtailed winters; **black ✕ = Uri's *curtailed* observed days "
-        "falling *below* the curve**, **red ★ = the latent estimate on the curve** into the extrapolated "
-        "extreme cold (dotted). **For a future Uri-class cold snap, read expected demand straight off this "
-        f"curve.** Model `a_year + b·HDD + c·HDD² + weekend + hour` (R²={s['r2']:.2f}); deepest cold is a "
-        "short extrapolation (band widens). Source: EIA-930 + ERA5 · method `docs/winter-storm-uri-2021.md`.")
+        f"**Top:** observed (collapses in blackouts) vs **latent** (~{s['peak_latent']:.0f} GW, unserved "
+        f"~{s['max_unserved']:.0f} GW) vs **no-storm** (~{s['nostorm_peak']:.0f} GW). **Bottom:** "
+        f"demand↔temp curve from un-curtailed winters — **✕** = curtailed observed (below curve), "
+        f"**★** = latent on the curve. Model R²={s['r2']:.2f}. Source: EIA-930 + ERA5.")
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading actual gas generation (EIA-930)…")
@@ -566,8 +586,9 @@ def zone_table(cdf: pd.DataFrame, mode: str):
 
 # ============================ page ========================================
 st.title("🌡️ Weather & Net-Load Monitor")
-DASH = st.radio("Dashboard", ["📡 Live monitor", "🔋 Weather-normalized history",
-                              "📈 Load vs temperature"],
+# Load vs temperature is the priority view → first option, so it is the default landing page.
+DASH = st.radio("Dashboard", ["📈 Load vs temperature", "📡 Live monitor",
+                              "🔋 Weather-normalized history"],
                 horizontal=True, label_visibility="collapsed")
 
 if DASH == "🔋 Weather-normalized history":
@@ -611,7 +632,7 @@ if DASH == "🔋 Weather-normalized history":
     ft.update_layout(height=300, margin=dict(t=10, b=10), yaxis_title="ERCOT temperature (°F)", showlegend=False)
     st.markdown("**Temperature** — what the weather actually was each period (median, quartiles, mean ◇). "
                 "This is the difference normalization removes.")
-    st.plotly_chart(ft, use_container_width=True)
+    st.plotly_chart(style_fig(ft), use_container_width=True)
 
     # ① weather → load: the correlation + the fitted line a + b·DD per period. b (units/°day) is the
     # weather-sensitivity, a is the weather-independent baseline; the drift in a,b across years is the
@@ -645,17 +666,14 @@ if DASH == "🔋 Weather-normalized history":
                 "**r** = how tightly weather explains it; **a** = weather-independent baseline; "
                 f"**b** = sensitivity ({yt} per degree day). Same {ddk.upper()} → the gap (and the "
                 "**a, b drift across years**) is structural, not weather.")
-    st.plotly_chart(fa, use_container_width=True)
+    st.plotly_chart(style_fig(fa), use_container_width=True)
     if coef_rows:
         cdf = pd.DataFrame(coef_rows).set_index("period")
         fmt = {c: ("{:.2f}" if (c == "r" or "slope" in c) else "{:.1f}") for c in cdf.columns}
         st.dataframe(cdf.style.format(fmt), use_container_width=True)
-        st.caption("**Find the correlation first:** `r` ≈ 0.9+ means weather almost fully explains the "
-                   "day-to-day swing — the relationship is real and tight. **Then read the drift:** "
-                   "rising **a** = always-on growth (data centers/electrification); rising **b** = more "
-                   "weather-sensitive load (AC). That `@DD=15` column is demand at *identical* weather — "
-                   "its climb across years is the pure structural change. Anchor the trend against "
-                   "ERCOT's published load growth before sizing it (a few years of slope is noisy).")
+        st.caption("`r` ≈ 0.9+ → weather explains the day-to-day swing. Rising **a** = always-on growth; "
+                   "rising **b** = more weather-sensitive load; `@DD=15` = demand at identical weather "
+                   "(its climb across years is the structural change).")
 
     # 🎯 Validation backtest — fit `value = a + b·DD` at a chosen time RESOLUTION, scored
     # OUT-OF-SAMPLE by leave-one-out CV (so a finer resolution can't win by memorising). Underpowered
@@ -684,10 +702,8 @@ if DASH == "🔋 Weather-normalized history":
         gap = scale(cv["oos_mae"] - cv["ins_mae"])
         # train/test sizes — leave-one-out: each fold trains on (window − 1) days, tests on 1.
         st.caption(
-            f"**Setup:** {cv['n_fit']} {res.lower()} window(s) of ~**{cv['median_days']} days** each "
-            f"(range {cv['min_days']}–{cv['max_days']}). Leave-one-out → each fit **trains on "
-            f"~{max(cv['median_days'] - 1, 0)} days and tests on 1** held-out day; **{cv['n_test']} "
-            f"test-days** total, fitting **{cv['n_params']} parameters**.")
+            f"**Setup:** {cv['n_fit']} {res.lower()} window(s) ~**{cv['median_days']} days** each; "
+            f"leave-one-out → **{cv['n_test']} held-out test-days**, **{cv['n_params']} parameters**.")
         vm = st.columns(4)
         vm[0].metric(f"OOS MAE ({yt})", f"{scale(cv['oos_mae']):.2f}",
                      delta=(f"{scale(cv['oos_mae'] - cv_base['oos_mae']):+.2f} vs weather-only"
@@ -711,7 +727,7 @@ if DASH == "🔋 Weather-normalized history":
                                 name="perfect (y = x)"))
         fv.update_layout(height=300, margin=dict(t=10, b=10), xaxis_title=f"actual {mname} ({yt})",
                          yaxis_title=f"predicted (OOS, {yt})", legend=dict(orientation="h", y=1.02))
-        st.plotly_chart(fv, use_container_width=True)
+        st.plotly_chart(style_fig(fv), use_container_width=True)
         if split_we and cv_base and cv_base["n_fit"]:
             dhelp = scale(cv_base["oos_mae"] - cv["oos_mae"])
             verdict_we = (f"**helps** — OOS MAE {scale(cv_base['oos_mae']):.2f} → {scale(cv['oos_mae']):.2f} "
@@ -720,26 +736,20 @@ if DASH == "🔋 Weather-normalized history":
                           f"**doesn't help** out-of-sample ({dhelp:+.2f} {yt}) — not worth the extra parameter")
             st.caption(
                 f"**Weekday/weekend split.** Weekends draw **{scale(cv['weekend_effect']):+.2f} {yt}** at the "
-                f"same weather (offices/industry idle). Adding the calendar term {verdict_we}. The residual "
-                "now decomposes into **weather** (the slope) + **calendar** (the weekend term) + the rest "
-                "(holidays/humidity/noise). It's kept only because it earns its place out-of-sample.")
+                f"same weather. Adding the calendar term {verdict_we}.")
         else:
             verdict = ("generalises well" if gap < 0.2 else
                        "**overfitting** — low in-sample MAE but the gap shows it isn't real skill")
             st.caption(
-                f"**Out-of-sample backtest** of `{mname} = a + b·{ddk.upper()}`, fit per **{res.lower()}** "
-                f"window (leave-one-out across {cv['n_fit']} windows). OOS MAE ≈ **{scale(cv['oos_mae']):.2f} "
-                f"{yt}**, in-sample {scale(cv['ins_mae']):.2f} → **overfit gap {gap:+.2f}** ({verdict}). "
-                "**Why this design:** in-sample MAE *falls* as you go finer (looks better!) but OOS doesn't "
-                "— the gap explodes at Week, and Daily can't fit. So fit the **slope on coarse data** "
-                "(season/month) and don't re-estimate it per week.")
+                f"**Out-of-sample backtest** of `{mname} = a + b·{ddk.upper()}` per **{res.lower()}** window "
+                f"(leave-one-out, {cv['n_fit']} windows). OOS MAE ≈ **{scale(cv['oos_mae']):.2f} {yt}**, "
+                f"in-sample {scale(cv['ins_mae']):.2f} → **overfit gap {gap:+.2f}** ({verdict}).")
     elif cv["n_fit"] == 0:
         st.error(f"At **{res}** resolution the slope can't be fit out-of-sample — that *is* the honest "
                  "result (a window needs enough hot-and-mild days; a single day has none).")
 
-    st.caption("ERCOT zone-mean temperature · Meteologica observations + ERA5 · see `docs/concepts.md`. "
-               "Add periods: `python -m src.backfill_history <years>`. (Gas burn lives on the 📡 Live "
-               "monitor; this view focuses on the structural temperature → demand relationship.)")
+    st.caption("ERCOT zone-mean temperature · Meteologica obs + ERA5. "
+               "Add periods: `python -m src.backfill_history <years>`.")
     st.stop()
 
 if DASH == "📈 Load vs temperature":
@@ -761,34 +771,37 @@ if DASH == "📈 Load vs temperature":
               "#bcbd22", "#7f7f7f", "#393b79", "#e7969c"]
     ZONES = ["Coast", "East", "Far West", "North", "North Central", "South Central", "Southern", "West"]
     yrs = list(_AVAIL)
-    ra = st.columns([1.5, 2.2, 1.3])
-    zone = ra[0].selectbox("Zone", ["Whole ERCOT", "All zones (overlay)"] + ZONES,
+    # All controls are uniform dropdown menus on two even rows of four — no radio "dots" / toggles —
+    # so the control bar reads as one clean, aligned grid above the scatter.
+    r1 = st.columns(4)
+    zone = r1[0].selectbox("Zone", ["Whole ERCOT", "All zones (overlay)"] + ZONES,
                            help="Whole ERCOT, all 8 weather zones overlaid, or a single zone. Per zone "
                                 "we plot that zone's demand vs its OWN temperature — more precise than "
                                 "the system mean (e.g. Far West is industrial → weak temp sensitivity).")
-    sel_years = ra[1].multiselect("Years", yrs, default=yrs)
-    resolution = ra[2].selectbox("Resolution", ["Hourly", "Daily", "Weekly", "Monthly", "Yearly"],
+    sel_years = r1[1].multiselect("Years", yrs, default=yrs)
+    resolution = r1[2].selectbox("Resolution", ["Hourly", "Daily", "Weekly", "Monthly", "Yearly"],
                                  index=1, help="Each scatter point is the mean over this bucket. "
                                  "Hourly = every observation (intraday spread); Daily = the classic "
                                  "load–temp scatter; coarser = the trend.")
     overlay = zone == "All zones (overlay)"
     is_zone = zone not in ("Whole ERCOT", "All zones (overlay)")
     demand_only = overlay or is_zone                       # net load is a system quantity (no zoning)
-    rb = st.columns([1.05, 1.15, 1.0, 1.0, 1.5])
     load_opts = ["Demand"] if demand_only else ["Demand", "Net load"]
-    metric = rb[0].radio("Load", load_opts, horizontal=True,
-                         help="Per-zone is demand-only — net load can't be zoned (renewables are "
-                              "dispatched grid-wide). Demand tracks temperature; net load is decoupled.")
-    color_by = rb[1].radio("Colour by", ["Year", "Month", "None"], horizontal=True, disabled=overlay,
-                           help="Year → structural drift (a curve per year). Month → seasonal clusters. "
-                                "Overlay mode forces colour = zone.")
-    fit_kind = rb[2].radio("Fit", ["Quadratic", "Linear", "None"], index=0, horizontal=True,
-                           help="Load↔temperature is U-shaped, so a quadratic fits both the heating "
-                                "and cooling arms; a line only follows one. R² is shown in the legend.")
-    qband = rb[3].toggle("Quantile band", value=False,
-                         help="Overlay the **P10–P90** spread of load at each temperature (+ P50 line) — "
-                              "the conditional distribution, pooled over the shown points.")
-    bat_mode = rb[4].selectbox("Remove battery charging", ["Off", "2025 only", "2025 & 2026"], index=0,
+    metric = r1[3].selectbox("Load", load_opts,
+                             help="Per-zone is demand-only — net load can't be zoned (renewables are "
+                                  "dispatched grid-wide). Demand tracks temperature; net load is decoupled.")
+    # Colour-by is fixed to Year (the structural-drift read) — the menu is removed by design. In overlay
+    # mode the scatter still colours by zone (handled by `cmode` below).
+    color_by = "Year"
+    r2 = st.columns(3)
+    fit_kind = r2[0].selectbox("Method", ["Quadratic", "Linear", "None"], index=0, key="lt_method",
+                               help="Load↔temperature is U-shaped, so a quadratic fits both the heating "
+                                    "and cooling arms; a line only follows one. R² is shown on each "
+                                    "legend entry.")
+    qband = r2[1].selectbox("Quantile band", ["Off", "On"], index=0,
+                            help="Overlay the **P10–P90** spread of load at each temperature (+ P50 line) — "
+                                 "the conditional distribution, pooled over the shown points.") == "On"
+    bat_mode = r2[2].selectbox("Remove battery charging", ["Off", "2025 only", "2025 & 2026"], index=0,
                                key="bat_mode", help="Subtract battery **charging** (load) from whole-ERCOT "
                                "demand for the chosen years — `demand + min(battery_net,0)`. Battery obs "
                                "exist ~late-2024+; system-only (ignored for single zones / overlay).")
@@ -827,17 +840,20 @@ if DASH == "📈 Load vs temperature":
                 "`python -m src.backfill_history --force` to cache the per-zone columns.")
         st.stop()
 
-    def _add_fit(fig, x, y, color, name):
-        """Overlay a polynomial regression curve (if fittable) + return its R²."""
-        if deg is None:
-            return None
-        f = poly_fit(x, y, deg)
-        if not f:
-            return None
-        fig.add_trace(go.Scatter(x=f["xs"], y=f["ys"], mode="lines", legendgroup=name,
-                                 line=dict(color=color, width=2.6, dash="dot"),
-                                 name=f"{name} fit · R²={f['r2']:.2f}"))
-        return f["r2"]
+    def _fit_curve(x, y):
+        """Polynomial fit dict (or None) for these points, honouring the Fit selector."""
+        return poly_fit(x, y, deg) if deg is not None else None
+
+    def _add_fit_line(fig, f, color, group):
+        """Dotted fit curve with NO own legend entry — the per-group R² rides on that group's marker
+        name instead (e.g. '2021 · R²=0.93'), so each colour is a SINGLE legend item that still shows
+        the R² and the legend stays on one row on a wide screen."""
+        fig.add_trace(go.Scatter(x=f["xs"], y=f["ys"], mode="lines", legendgroup=group,
+                                 showlegend=False, line=dict(color=color, width=2.6, dash="dot")))
+
+    def _leg(base, f):
+        """Legend label: 'base · R²=…' when a fit exists, else the plain base label."""
+        return f"{base} · R²={f['r2']:.2f}" if f else base
 
     fig = go.Figure()
     big = len(data) > 4000  # hourly / overlay across many years → WebGL keeps it smooth
@@ -848,27 +864,35 @@ if DASH == "📈 Load vs temperature":
             if d.empty:
                 continue
             col = COLORS[i % len(COLORS)]
+            f = _fit_curve(d["temp"], d["value"])
             fig.add_trace(Scatter(x=d["temp"], y=d["value"], mode="markers", legendgroup=z,
-                                  marker=dict(color=col, size=5, opacity=0.5), name=z))
-            _add_fit(fig, d["temp"], d["value"], col, z)
+                                  marker=dict(color=col, size=5, opacity=0.5), name=_leg(z, f)))
+            if f:
+                _add_fit_line(fig, f, col, z)
     elif cmode == "Year":
         for i, y in enumerate(sorted(data["year"].unique())):
             col = COLORS[i % len(COLORS)]
             d = data[data["year"] == y]
+            f = _fit_curve(d["temp"], d["value"])
             fig.add_trace(Scatter(x=d["temp"], y=d["value"], mode="markers", legendgroup=str(y),
-                                  marker=dict(color=col, size=5, opacity=0.5), name=str(y)))
-            _add_fit(fig, d["temp"], d["value"], col, str(y))
+                                  marker=dict(color=col, size=5, opacity=0.5), name=_leg(str(y), f)))
+            if f:
+                _add_fit_line(fig, f, col, str(y))
     elif cmode == "Month":
         for m in sorted(data["month"].unique()):
             col = COLORS[(m - 1) % len(COLORS)]
             d = data[data["month"] == m]
             fig.add_trace(Scatter(x=d["temp"], y=d["value"], mode="markers", legendgroup=MONTHS[m],
                                   marker=dict(color=col, size=5, opacity=0.5), name=MONTHS[m]))
-        _add_fit(fig, data["temp"], data["value"], "#111", "overall")
+        f = _fit_curve(data["temp"], data["value"])
+        if f:
+            _add_fit_line(fig, f, "#111", "overall")
     else:
-        fig.add_trace(Scatter(x=data["temp"], y=data["value"], mode="markers",
-                              marker=dict(color="#1f77b4", size=5, opacity=0.45), name="points"))
-        _add_fit(fig, data["temp"], data["value"], "#111", "overall")
+        f = _fit_curve(data["temp"], data["value"])
+        fig.add_trace(Scatter(x=data["temp"], y=data["value"], mode="markers", legendgroup="overall",
+                              marker=dict(color="#1f77b4", size=5, opacity=0.45), name=_leg("points", f)))
+        if f:
+            _add_fit_line(fig, f, "#111", "overall")
     if qband:  # optional P10–P90 band + P50 (conditional spread of load at each temperature)
         qb = quantile_bands(data["temp"], data["value"], width=2.0, qs=(0.1, 0.5, 0.9))
         if not qb.empty:
@@ -881,11 +905,11 @@ if DASH == "📈 Load vs temperature":
     mlabel = "Demand" if demand_only else metric
     xlab = ("zone temperature (°F)" if overlay else
             f"{zone} temperature (°F)" if is_zone else "ERCOT load-weighted temperature (°F)")
-    fig.update_layout(height=470, margin=dict(t=10, b=10), xaxis_title=xlab,
+    fig.update_layout(height=470, margin=dict(t=58, b=10), xaxis_title=xlab,
                       yaxis_title=f"{mlabel} (GW)", legend=dict(orientation="h", y=1.02),
                       hovermode="closest")
 
-    # per-zone temperature sensitivity (its OWN Interval selector, independent of the scatter)
+    # per-zone temperature sensitivity (its OWN Interval selector) — RENDERED at the bottom now.
     HOT, COLD = 70.0, 55.0
 
     def _arm_slope(sub: pd.DataFrame) -> tuple[float, float]:
@@ -895,14 +919,23 @@ if DASH == "📈 Load vs temperature":
         s = sub["v"].cov(sub["t"]) / sub["t"].var() / 1000.0          # GW per °F
         return s, float(sub["t"].corr(sub["v"]) ** 2)
 
-    def _zone_sensitivity(sens_key: str) -> pd.DataFrame:
-        """Per-zone Mean/Cool/Heat sensitivity table at the panel's own resolution."""
+    def _zone_sensitivity(sens_key, years, m_lo, m_hi, hours_arg):
+        """Per-zone Mean/Cool/Heat sensitivity — pooled over the chosen YEARS, restricted to a
+        contiguous MONTH window [m_lo, m_hi] and an HOUR-of-day filter (this panel's own controls,
+        fully decoupled from the scatter)."""
         rows = {}
         for z in ZONES:
             tcol, vcol = f"temp_{z}", f"demand_{z}"
-            parts = [lt_scatter(hist_panel(y, tuple(_AVAIL[y])), vcol, sens_key, temp_col=tcol)
-                     .rename(columns={tcol: "t", vcol: "v"}) for y in sel_years]
-            parts = [p for p in parts if not p.empty]
+            parts = []
+            for y in years:
+                p = lt_scatter(hist_panel(y, tuple(_AVAIL[y])), vcol, sens_key, temp_col=tcol,
+                               hours=hours_arg)
+                if not p.empty:
+                    p = p[p.index.year == y]                            # drop tz-edge rows
+                if not p.empty:
+                    p = p[(p.index.month >= m_lo) & (p.index.month <= m_hi)]   # this panel's month window
+                if not p.empty:
+                    parts.append(p.rename(columns={tcol: "t", vcol: "v"}))
             if not parts:
                 continue
             d = pd.concat(parts)
@@ -912,102 +945,72 @@ if DASH == "📈 Load vs temperature":
                        "Heat GW/°F": abs(hs) if hs == hs else float("nan"), "Heat R²": hr}
         return pd.DataFrame(rows).T
 
-    # ---- side-by-side 1×2: the scatter | the per-zone sensitivity map ----
-    left, right = st.columns(2)
-    with left:
-        st.markdown("**Load vs temperature** — the relationship & its drift")
-        st.plotly_chart(fig, use_container_width=True)
-    with right:
-        st.markdown("**🗺️ Per-zone temperature sensitivity** — *where* heat becomes load")
-        rcc = st.columns([1.5, 1.2])
-        map_metric = rcc[0].radio("Map", ["Cooling", "Heating", "Mean demand"], horizontal=True,
-                                  key="zone_sens_metric", help="Colour the zones by cooling sensitivity "
-                                  "(summer AC — the headline), heating sensitivity (winter), or mean "
-                                  "demand. Slope = GW of demand per +1 °F.")
-        sens_res = rcc[1].selectbox("Interval", ["Hourly", "Daily", "Weekly", "Monthly", "Yearly"],
-                                    index=1, key="zone_sens_res", help="Resolution for the per-zone "
-                                    "response — **independent** of the scatter's. Coarse intervals "
-                                    "(Monthly/Yearly) may be unfittable → blank.")
-        ztab = _zone_sensitivity(sens_res.lower())
-        if ztab.empty:
-            st.info("Per-zone columns not cached — run `python -m src.backfill_history --force`.")
+    # ======================= ROW 1 (2×2 top): scatter | weather-normalized load growth =======================
+    # Growth controls sit in a thin control row ABOVE the figures (right half) so the two charts below
+    # start at the SAME vertical level — the scatter is no longer pulled up by having no controls of its
+    # own above it (the empty left half gives it matching height).
+    _ctl_l, ctl_r = st.columns(2)
+    with ctl_r:
+        wn_c = st.columns(3)
+        wn_zone = wn_c[0].selectbox("Zone (growth)", ["Whole ERCOT"] + ZONES, key="wn_zone",
+                                    help="Weather-normalize the whole system or a single zone (its own "
+                                         "demand vs its own temperature).")
+        wn_method = wn_c[1].selectbox("Method", ["Quadratic", "Degree-day (CDD/HDD)"], key="wn_method",
+                                      help="How each year's load↔temperature fit is built before "
+                                      "normalizing: a **quadratic** in temperature, or the **degree-day "
+                                      "model** `a + b·CDD + c·HDD` (separates baseline, cooling, heating).")
+        wn_interval = wn_c[2].selectbox("Resolution", ["Daily", "Weekly", "Monthly"], index=1,
+                                        key="wn_interval", help="Seasonal x-axis granularity: **Daily** "
+                                        "(365 pts, smoothest), **Weekly** (52), or **Monthly** (12).")
+    g_left, g_right = st.columns(2)
+    with g_left:
+        st.plotly_chart(style_fig(fig, "Load vs temperature — relationship & drift"),
+                        use_container_width=True)
+    with g_right:
+        freq = {"Daily": "day", "Weekly": "week", "Monthly": "month"}[wn_interval]
+        wtcol, wvcol = (("temp", "demand") if wn_zone == "Whole ERCOT"
+                        else (f"temp_{wn_zone}", f"demand_{wn_zone}"))
+        method = "dd" if wn_method.startswith("Degree") else "poly"
+        daily_by_year = {}
+        for y in sel_years:
+            p = hist_panel(y, tuple(_AVAIL[y]))
+            dd = lt_scatter(p, wvcol, "daily", temp_col=wtcol)    # [temp_col, value] daily
+            if not dd.empty:
+                daily_by_year[y] = dd.rename(columns={wtcol: "temp", wvcol: "demand"})
+        curves, _normal = wn_seasonal_curves(daily_by_year, "demand", degree=2, method=method, freq=freq)
+        znm = "ERCOT" if wn_zone == "Whole ERCOT" else wn_zone
+        if curves.empty:
+            st.info("Not enough cached history to weather-normalize — backfill more months "
+                    "(`python -m src.backfill_history --force`).")
         else:
-            mcol = {"Cooling": "Cool GW/°F", "Heating": "Heat GW/°F", "Mean demand": "Mean GW"}[map_metric]
-            is_sens = map_metric != "Mean demand"
-            unit = "GW/°F" if is_sens else "GW"
-            vfmt = "{:.2f}" if is_sens else "{:.1f}"
-            zdict = {z: v for z, v in ztab[mcol].items() if v == v}
-            st.plotly_chart(build_demand_map(zdict, f"{map_metric} sensitivity" if is_sens else map_metric,
-                            colorbar_title=unit, unit=unit, value_fmt=vfmt, height=470),
+            curves = curves / 1000.0                              # MW → GW
+            if freq == "day":                                     # map the period key → a date for the axis
+                xref = [pd.Timestamp(dt.date(2023, 1, 1)) + pd.Timedelta(days=int(k) - 1) for k in curves.index]
+                summer = range(182, 213)                          # ~Jul day-of-year
+            elif freq == "month":
+                xref = [pd.Timestamp(2023, int(k), 15) for k in curves.index]
+                summer = [7]
+            else:
+                xref = [pd.Timestamp(dt.date.fromisocalendar(2023, int(k), 1)) for k in curves.index]
+                summer = range(27, 32)                            # ~Jul week-of-year
+            years_sorted = sorted(curves.columns)
+            fig3 = go.Figure()
+            for i, y in enumerate(years_sorted):
+                fig3.add_trace(go.Scatter(x=xref, y=curves[y], mode="lines", name=str(y),
+                                          line=dict(color=COLORS[i % len(COLORS)], width=2.4)))
+            fig3.update_layout(height=470, margin=dict(t=58, b=10),
+                               yaxis_title=f"weather-normalized {znm} demand (GW)",
+                               legend=dict(orientation="h", y=1.02), hovermode="x unified")
+            fig3.update_xaxes(tickformat="%b", dtick="M1")
+            st.plotly_chart(style_fig(fig3, f"Weather-normalized {znm} load growth"),
                             use_container_width=True)
 
-    # scatter stats (full width)
-    mc = st.columns(4)
-    mc[0].metric("Points", f"{len(data):,}")
-    mc[1].metric("Temp range", f"{data['temp'].min():.0f}–{data['temp'].max():.0f} °F")
-    mc[2].metric(f"{mlabel} range", f"{data['value'].min():.0f}–{data['value'].max():.0f} GW")
-    fov = ({} if (overlay or not deg) else poly_fit(data["temp"], data["value"], deg))
-    mc[3].metric("Overall R²", f"{fov['r2']:.2f}" if fov else "—",
-                 help="Fit quality across all shown points (per-group R² is in the legend; "
-                      "n/a in overlay since zones have different baselines).")
-
-    # per-zone response table (full width — wider than the half-width map column)
-    if not ztab.empty:
-        st.markdown(f"**Per-zone response ({sens_res.lower()})** — mean demand, cooling/heating "
-                    "sensitivity (GW/°F) + R² per zone (cooling arm ≥ 70 °F, heating arm ≤ 55 °F); set "
-                    "by the **Interval** selector beside the map (its own, independent of the scatter).")
-        order = ztab.sort_values("Cool GW/°F", ascending=False)
-        vmax = float(ztab["Cool GW/°F"].abs().max() or 1.0)
-        sty = (order.style.format({"Mean GW": "{:.1f}", "Cool GW/°F": "{:+.2f}", "Cool R²": "{:.2f}",
-                                   "Heat GW/°F": "{:.2f}", "Heat R²": "{:.2f}"})
-               .map(lambda v: _temp_bg(v, 0, vmax) if pd.notna(v) else "", subset=["Cool GW/°F"]))
-        st.dataframe(sty, use_container_width=True)
-
-    # captions (full width)
-    cov = ", ".join(f"{y} ({''.join(MONTHS[m][0] for m in _AVAIL[y])})" for y in sel_years)
-    if overlay:
-        lead = ("**Left:** a **zone's** demand vs **its own** temperature, all 8 zones overlaid with a "
-                "fit each — steep cooling arms (Coast/Houston, North-Central/DFW) vs **flat** Far West "
-                "(industrial). ")
-    elif is_zone:
-        lead = (f"**Left:** **{zone}** demand vs **{zone}** temperature — the U / hockey-stick; colour "
-                "by Year to see this zone's drift. ")
-    else:
-        lead = (f"**Left:** ERCOT {mlabel.lower()} vs load-weighted temperature — a **U / hockey-stick** "
-                "(heating cold-end, cooling hot-end, trough ~65 °F, hence the quadratic fit); colour by "
-                "Year reads the **structural drift** (curve up = growth). **Net load** flattens it. ")
-    rlead = ""
-    if not ztab.empty:
-        sens = ztab["Cool GW/°F"].dropna()
-        if not sens.empty:
-            rlead = (f"**Right:** each zone coloured by sensitivity (GW of demand per +1 °F). "
-                     f"**{sens.idxmax()} ({sens.max():+.2f} GW/°F)** is most AC-driven, "
-                     f"**{sens.idxmin()} ({sens.min():+.2f})** the least (industrial/sparse) — *where* a "
-                     "heat event becomes load. ")
-    bat_note = ""
-    if bat_years and (zone == "Whole ERCOT"):
-        bat_note = (f" **Battery:** charging removed from whole-ERCOT demand for {bat_mode} "
-                    f"(≈ −{bat_applied:.2f} GW daily-mean on the adjusted year(s); `demand + "
-                    "min(battery_net,0)`, system-only, ~late-2024+ data).")
-    elif bat_years:
-        bat_note = " *(Battery removal applies to whole-ERCOT demand only — ignored for this zone view.)*"
-    st.caption(
-        lead + rlead + "Per-zone is **demand only** — net load is a system quantity (renewables aren't "
-        "zoned). Cached coverage: " + cov + ". **Data:** load = Meteologica *observed* demand (system "
-        "+ per-zone); temperature = **ERA5 reanalysis** (Open-Meteo archive), load-weighted across the "
-        "8 zone cities. See `docs/data-sources.md §9`." + bat_note
-    )
-
-    # ---- Full-year vs Year-to-date (apples-to-apples) — two pairs: all years, then 2025 & 2026 ----
-    # Follows the dashboard's Zone / Load / Fit selectors (+ the battery toggle for whole-ERCOT). The YTD
+    # ===================== ROW 2 (2×2): Full-year vs month-window — all selected years =====================
+    # Follows the dashboard's Zone / Load / Fit selectors (+ the battery toggle for whole-ERCOT). The window
     # compares YEARS (colour = year), so an 8-zone overlay would be unreadable → overlay falls back to whole.
     st.divider()
-    st.markdown("**📅 Full-year vs selected month window** — two pairs: **all selected years** (top) and "
-                "**2025 & 2026 only** (bottom). The **right** panel clips every year to *any* contiguous "
-                "month window (e.g. **Mar→May**); below you can also drill to **one weather zone/station** "
-                "and to a **trader hour-block** (e.g. evening peak 18–22) — each point then becomes that "
-                "block's mean. Apples-to-apples per-year fit; start the month handle at the first month for "
-                "the classic YTD.")
+    st.markdown("**📅 Full-year vs selected month window** — each year's demand vs temperature: "
+                "full data (left) vs a chosen month/hour window (right).")
     # Window options span the UNION of all selected years' cached months, so the trader can extend the
     # window to Aug/Sep/Dec on the full-history years (the data vendor has them). The newest year (2026)
     # only has ~through May cached, so it simply contributes fewer/no points in a later window.
@@ -1066,19 +1069,19 @@ if DASH == "📈 Load vs temperature":
             col = COLORS[i % len(COLORS)]
             ff = poly_fit(dY["temp"], dY["value"], deg) if deg else {}
             # R² shows in the legend (on the fit line); markers carry the legend only when no fit
+            nm = f"{yy} · R²={ff['r2']:.2f}" if ff else str(yy)           # R² on the one entry per year
             f.add_trace(go.Scattergl(x=dY["temp"], y=dY["value"], mode="markers", legendgroup=str(yy),
-                                     marker=dict(color=col, size=4, opacity=0.45), name=str(yy),
-                                     showlegend=not ff))
+                                     marker=dict(color=col, size=4, opacity=0.45), name=nm,
+                                     showlegend=True))
             if ff:
                 f.add_trace(go.Scatter(x=ff["xs"], y=ff["ys"], mode="lines", legendgroup=str(yy),
-                                       line=dict(color=col, width=2.4, dash="dot"),
-                                       name=f"{yy} · R²={ff['r2']:.2f}"))
-        f.update_layout(height=400, margin=dict(t=34, b=10), title=title, xaxis_title=ytd_xlab,
+                                       showlegend=False, line=dict(color=col, width=2.4, dash="dot")))
+        f.update_layout(height=400, margin=dict(t=58, b=10), title=title, xaxis_title=ytd_xlab,
                         yaxis_title=ytd_ylab, legend=dict(orientation="h", y=1.02), hovermode="closest")
         return f
 
-    def _ytd_pair(years_list: list, header: str) -> None:
-        """Render one Full-year | YTD pair (+ per-year R²/weather table) for a set of years."""
+    def _ytd_compute(years_list: list):
+        """Build (full-year frame, window frame) for a set of years, or (None, None) if no data."""
         yrecs = []
         for y in years_list:
             p = hist_panel(y, tuple(_AVAIL[y]))
@@ -1096,18 +1099,24 @@ if DASH == "📈 Load vs temperature":
             yrecs.append(pd.DataFrame({"temp": dd[ytd_tcol].to_numpy()[m],
                                        "value": dd[ytd_vcol].to_numpy()[m] / 1000.0,
                                        "year": y, "month": ts[m].month}))
-        st.markdown(header)
         if not yrecs:
-            st.info("No cached history for this selection.")
-            return
+            return None, None
         yall = pd.concat(yrecs, ignore_index=True)
-        yytd = yall[(yall["month"] >= start_month) & (yall["month"] <= end_month)]   # the chosen month window
+        yytd = yall[(yall["month"] >= start_month) & (yall["month"] <= end_month)]   # the chosen window
+        return yall, yytd
+
+    def _ytd_figs(yall: pd.DataFrame, yytd: pd.DataFrame) -> None:
+        """Render the Full-year | Window figure pair (no table — that goes to the bottom)."""
         fcol, ycol = st.columns(2)
         with fcol:
-            st.plotly_chart(_peryear_fig(yall, f"Full year — all available data{hour_suffix}"),
+            st.plotly_chart(style_fig(_peryear_fig(yall, f"Full year — all available data{hour_suffix}")),
                             use_container_width=True)
         with ycol:
-            st.plotly_chart(_peryear_fig(yytd, f"Window — {win_lbl}{hour_suffix}"), use_container_width=True)
+            st.plotly_chart(style_fig(_peryear_fig(yytd, f"Window — {win_lbl}{hour_suffix}")),
+                            use_container_width=True)
+
+    def _ytd_table(yall: pd.DataFrame, yytd: pd.DataFrame) -> pd.DataFrame:
+        """Per-year R²/weather table for a pair — returned (rendered later in Fitting statistics)."""
         ref = (int(round(float(yytd["temp"].median()))) if not yytd.empty and yytd["temp"].notna().any()
                else int(round(float(yall["temp"].median()))))
         srows = {}
@@ -1133,37 +1142,23 @@ if DASH == "📈 Load vs temperature":
                 f"Win @{ref}°F (GW)": round(float(np.polyval(ff_win["coef"], ref)), 1) if ff_win else float("nan"),
                 "Batt −GW removed": round(batt, 2),         # 0 unless this year is being adjusted
             }
-        st.dataframe(pd.DataFrame(srows).T, use_container_width=True)
+        return pd.DataFrame(srows).T
 
-    _ytd_pair(sel_years, "**① All selected years** — R² in each legend; table = R² (both panels) + the "
-                         "actual temperature each year had *inside the chosen window*.")
-    yr_2526 = [y for y in sel_years if y in (2025, 2026)]
-    if yr_2526:
-        st.markdown("")
-        _ytd_pair(yr_2526, "**② 2025 & 2026 only** — same Full-year vs YTD pair, restricted to the "
-                           "battery-era years for a close comparison (the **Remove battery charging** "
-                           "control above adjusts these too).")
-    st.caption(
-        f"2×2 grid: **top** = all selected years, **bottom** = 2025 & 2026 only; **left** = full data, "
-        f"**right** = clipped to the chosen window (**{win_lbl}**) — drag *either* handle of the slider to "
-        "segment any contiguous span (e.g. Mar→May) or start at the first month for classic YTD. "
-        f"The **Zone/station** (`{ytd_zone}`) and **hour-block** (`{hour_lbl}`) selectors apply to *both* "
-        "panels and *both* pairs — picking e.g. *Evening peak 18–22* makes every point that day's "
-        "evening-block mean (the on-peak load–temp curve, where scarcity actually bites); a single zone "
-        "uses that zone's own city temperature (demand-only). R² in every legend + per-pair table. "
-        "**Why the curves barely move with battery removal:** charging is only ~**0.5 GW (2025) → 1.0 GW "
-        "(2026)** daily-mean — ~1–2 % of the ~50 GW level — so the shift is real but **invisible by eye on "
-        "this axis**. Read it in the table's **`Batt −GW removed`** and **`@ref`** columns: removing 2025 "
-        "alone moves its @66 °F from 49.1 → 48.6 GW (growth +0.8 → +1.4); removing both → +0.4. "
-        "(Exploratory — we'll decide which to keep.)")
+    st.markdown("**① All selected years** — full year (left) vs the chosen window (right).")
+    yall_all, yytd_all = _ytd_compute(sel_years)
+    full_year_table = None
+    if yall_all is None:
+        st.info("No cached history for this selection.")
+    else:
+        _ytd_figs(yall_all, yytd_all)
+        full_year_table = _ytd_table(yall_all, yytd_all)
 
-    # ---- per-station (per-zone) fits: each zone's actual demand vs its own temperature (option) ----
+    # ===================== ROW 3: per-station (per-zone) fits — each zone's own demand vs its own temp =====================
+    ps_r2_df = ps_cmp_df = None                            # filled below; rendered in Fitting statistics
     with st.expander("🔬 Per-station fits — each zone's *actual* demand vs its *own* temperature, "
                      "with the fit curve + R²", expanded=True):
-        st.caption("**Independent controls** for this panel (separate from the 2×2 pair above): set the "
-                   "frequency, a contiguous **month** span, and a **double-ended hour range** — each point "
-                   "becomes the mean over the chosen hours. **Overlaid per selected year** — pick them in "
-                   "**Years to show** below (independent of the top Years selector).")
+        st.caption("**Independent controls** — frequency, month span, hour range & years to show "
+                   "(separate from the panels above).")
         psc = st.columns([1.0, 1.5, 1.6])
         ps_res = psc[0].selectbox("Resolution", ["Hourly", "Daily", "Weekly", "Monthly"], index=1,
                                   key="ps_res", help="Point aggregation: Hourly = every kept hour; coarser = "
@@ -1183,13 +1178,13 @@ if DASH == "📈 Load vs temperature":
                                       key="ps_years", help="This panel's independent year filter — which years "
                                       "to overlay here (one fit curve per year). Does not change the top Years "
                                       "selector or the month/hour windows.")
-        ps_method = pyc[1].selectbox("Fit method",
+        ps_method = pyc[1].selectbox("Method",
                                      ["Quadratic", "Linear", "Cubic", "Piecewise", "Auto (best fit)"],
                                      index=0, key="ps_fit", help="How each year's points are fit. **Quadratic** "
                                      "= robust default for the U-shape; **Piecewise** = balance-point HDD/CDD "
                                      "(independent heating & cooling slopes meeting at a balance point); "
                                      "**Cubic** rarely beats quadratic; **Linear** can't follow the U; **Auto** "
-                                     "= best per zone by adjusted R². Comparison is the 2nd table below.")
+                                     "= best per zone by adjusted R². Comparison is in Fitting statistics.")
         ps_key = ps_res.lower()
         ps_m_lo, ps_m_hi = ps_all_m[ps_mlbls.index(ps_seg[0])], ps_all_m[ps_mlbls.index(ps_seg[1])]
         ps_hours = set(range(ps_h[0], ps_h[1] + 1))
@@ -1299,50 +1294,49 @@ if DASH == "📈 Load vs temperature":
                             psfig.add_trace(go.Scatter(x=f["xs"], y=f["ys"], mode="lines", legendgroup=str(yy),
                                             showlegend=False, line=dict(color=yr_color[yy], width=2)), row=r, col=c)
                 psfig.update_layout(height=700, margin=dict(t=104, b=10),
-                                    legend=dict(orientation="h", yanchor="bottom", y=1.06, x=0,
-                                                title_text="Year", font=dict(size=16),
-                                                title_font=dict(size=16), itemsizing="constant"))
+                                    legend=dict(orientation="h", yanchor="bottom", y=1.06,
+                                                title_text="Year", itemsizing="constant"))
                 psfig.update_xaxes(title_text="°F", row=2)
                 psfig.update_yaxes(title_text="GW", col=1)
-                st.plotly_chart(psfig, use_container_width=True)
-                st.caption("**R² per zone × year** — how weather-driven each zone is, year by year "
-                           "(blank = too few points / too flat to fit).")
+                psfig.update_annotations(font_size=15)       # enlarge the per-zone subplot titles
+                st.plotly_chart(style_fig(psfig, legend_size=16), use_container_width=True)
                 r2_df = pd.DataFrame(r2_rows).T.reindex(ZONES).reindex(columns=sorted(ps_years))
-                st.dataframe(r2_df, use_container_width=True)
-                st.caption("**Which fit is most appropriate? — adjusted R² by zone** (pooled over the shown "
-                           "years; higher = better, penalised for extra parameters). **Best** = the model to "
-                           "use; **BalPt°F** = the piecewise heating/cooling balance point. **Linear** can't "
-                           "follow the U-shape (low everywhere); **Quadratic** and **Piecewise** are close and "
-                           "best; **Cubic** rarely helps; **Far West** is weather-decoupled (all ≈ 0).")
                 cmp_df = (pd.DataFrame(fit_cmp).T.reindex(ZONES)
                           .reindex(columns=["Linear", "Quadratic", "Cubic", "Piecewise", "Best", "BalPt°F"]))
-                st.dataframe(cmp_df, use_container_width=True)
-                st.caption(
-                    "Each panel = one **ERCOT weather zone** (its city = the weather station): **actual demand "
-                    "(GW) vs that zone's own ERA5 temperature (°F)**, with **one fit curve per year, "
-                    "colour-matched to that year's points** (curve method set by **Fit method** above) — so the "
-                    "**year-over-year drift** of the curve is visible on the same panel; per-year **R²** is in "
-                    "the first table. **R² = how weather-driven the zone is** — AC metros (Coast/Houston, North "
-                    "Central/DFW) fit a tight U (high R²); **Far West is flat & low-R²** (oil-&-gas industrial "
-                    "load barely responds to weather). Demand only (per-zone net load isn't defined). The "
-                    "**vertical gap between year-curves at a fixed temperature is structural growth.**")
+                ps_r2_df, ps_cmp_df = r2_df, cmp_df
 
-    # ---- ❄️ Feb 2021 Winter Storm Uri — counterfactual case study (EIA + ERA5) ----
+    # ===================== ROW 4 (2×2): Full-year vs window — 2025 & 2026 only =====================
+    st.divider()
+    yr_2526 = [y for y in sel_years if y in (2025, 2026)]
+    pair2526_table = None
+    if not yr_2526:
+        st.caption("**② 2025 & 2026 only** — select 2025 and/or 2026 in the top **Years** to show the "
+                   "battery-era pair here.")
+    else:
+        st.markdown("**② 2025 & 2026 only** — full year (left) vs the chosen window (right), "
+                    "battery-era years.")
+        yall_b, yytd_b = _ytd_compute(yr_2526)
+        if yall_b is None:
+            st.info("No cached 2025/2026 history for this selection.")
+        else:
+            _ytd_figs(yall_b, yytd_b)
+            pair2526_table = _ytd_table(yall_b, yytd_b)
+
+    # ===================== ROW 5: ❄️ Feb 2021 Winter Storm Uri — counterfactual case study (EIA + ERA5) =====================
     st.divider()
     with st.expander("❄️ Feb 2021 Winter Storm Uri — what was the *real* demand? (EIA + ERA5 case study)"):
         render_uri_panel()
 
-    # ---- per-zone load time series (TradingView-style: pick interval + zoom/pan the window) ----
+    # ===================== BOTTOM · supplementary: per-zone load time series =====================
     st.divider()
-    st.markdown("**📉 Per-zone load — time series** — the raw demand curve over the cached history at "
-                "a **selectable interval**. Use the range buttons or drag on the chart to zoom.")
+    st.markdown("**📉 Per-zone load — time series** — raw demand over the cached history.")
     tv = st.columns([2.6, 1.7])
     tv_zones = tv[0].multiselect("Zones", ["Whole ERCOT"] + ZONES, default=["Whole ERCOT"],
                                  key="tv_zones", help="Pick one or more zones to overlay (tags) — add "
                                  "'Whole ERCOT' and/or any weather zones.")
-    tv_int = tv[1].radio("Interval", ["Hourly", "Daily", "Weekly", "Monthly"], horizontal=True,
-                         index=1, key="tv_int", help="Each point is the mean over this bucket "
-                         "(TradingView-style bar size). Hourly = every observation.")
+    tv_int = tv[1].selectbox("Resolution", ["Hourly", "Daily", "Weekly", "Monthly"], index=1,
+                             key="tv_int", help="Each point is the mean over this bucket "
+                             "(TradingView-style bar size). Hourly = every observation.")
     panels = [hist_panel(y, tuple(_AVAIL[y])) for y in sel_years]
     panels = [p for p in panels if not p.empty]
     if not tv_zones:
@@ -1369,7 +1363,7 @@ if DASH == "📈 Load vs temperature":
             ftv.add_trace(TVScatter(x=s.index, y=s.values, mode="lines", name=nm,
                                     line=dict(color=c, width=1.3)))
         ylab = "demand (GW)" if len(traces) != 1 else f"{traces[0][0]} demand (GW)"
-        ftv.update_layout(height=460, margin=dict(t=10, b=10), yaxis_title=ylab,
+        ftv.update_layout(height=460, margin=dict(t=58, b=10), yaxis_title=ylab,
                           legend=dict(orientation="h", y=1.02), hovermode="x unified")
         ftv.update_xaxes(rangeslider_visible=False, rangeselector=dict(buttons=[
             dict(count=7, label="1w", step="day", stepmode="backward"),
@@ -1378,80 +1372,120 @@ if DASH == "📈 Load vs temperature":
             dict(count=6, label="6m", step="month", stepmode="backward"),
             dict(count=1, label="1y", step="year", stepmode="backward"),
             dict(step="all", label="all")]))
-        st.plotly_chart(ftv, use_container_width=True)
-        st.caption(f"Per-zone observed demand (Meteologica), **{tv_int.lower()}** mean, {total:,} points. "
-                   "Use the range buttons (1w…all) or drag on the chart to zoom; the **Interval** "
-                   "changes the bar size. Gaps = uncached months (2022 Jan–Feb, mid-2026 on).")
+        st.plotly_chart(style_fig(ftv, "Per-zone load — time series"), use_container_width=True)
 
-    # ---- Figure 3: weather-normalized seasonal load growth (one curve per year) ----
+    # ===================== BOTTOM · per-zone temperature sensitivity (standalone, independent filters) =====================
     st.divider()
-    st.markdown("**📈 Weather-normalized load growth** — each year's daily demand with the **weather "
-                "removed** (held at the normal seasonal temperature), across the calendar. The gap "
-                "between curves is **structural growth** (data centres / electrification), not weather.")
-    g3 = st.columns([1.4, 1.7, 1.1])
-    wn_zone = g3[0].selectbox("Zone (growth)", ["Whole ERCOT"] + ZONES, key="wn_zone",
-                              help="Weather-normalize the whole system or a single zone (its own demand "
-                                   "vs its own temperature).")
-    wn_method = g3[1].radio("Method", ["Quadratic", "Degree-day (CDD/HDD)"], horizontal=True,
-                            key="wn_method", help="How each year's load↔temperature fit is built before "
-                            "normalizing: a **quadratic** in temperature, or the **degree-day model** "
-                            "`a + b·CDD + c·HDD` (separates the baseline, cooling, and heating terms).")
-    wn_interval = g3[2].selectbox("Interval", ["Daily", "Weekly", "Monthly"], index=1, key="wn_interval",
-                                  help="Seasonal x-axis granularity of the growth curve: **Daily** "
-                                       "(365 pts, smoothest), **Weekly** (52), or **Monthly** (12).")
-    freq = {"Daily": "day", "Weekly": "week", "Monthly": "month"}[wn_interval]
-    wtcol, wvcol = ("temp", "demand") if wn_zone == "Whole ERCOT" else (f"temp_{wn_zone}", f"demand_{wn_zone}")
-    method = "dd" if wn_method.startswith("Degree") else "poly"
-    daily_by_year = {}
-    for y in sel_years:
-        p = hist_panel(y, tuple(_AVAIL[y]))
-        dd = lt_scatter(p, wvcol, "daily", temp_col=wtcol)    # [temp_col, value] daily
-        if not dd.empty:
-            daily_by_year[y] = dd.rename(columns={wtcol: "temp", wvcol: "demand"})
-    curves, _normal = wn_seasonal_curves(daily_by_year, "demand", degree=2, method=method, freq=freq)
-    znm = "ERCOT" if wn_zone == "Whole ERCOT" else wn_zone
-    if curves.empty:
-        st.info("Not enough cached history to weather-normalize — backfill more months "
-                "(`python -m src.backfill_history --force`).")
-    else:
-        curves = curves / 1000.0                              # MW → GW
-        if freq == "day":                                     # map the period key → a date for the axis
-            xref = [pd.Timestamp(dt.date(2023, 1, 1)) + pd.Timedelta(days=int(k) - 1) for k in curves.index]
-            summer = range(182, 213)                          # ~Jul day-of-year
-        elif freq == "month":
-            xref = [pd.Timestamp(2023, int(k), 15) for k in curves.index]
-            summer = [7]
+    with st.expander("🗺️ Per-zone temperature sensitivity — *where* heat becomes load "
+                     "(standalone: independent period & hour filters)", expanded=True):
+        st.caption("**Standalone controls** — own year / month / hour filters, decoupled from the "
+                   "scatter. Slope = GW of demand per +1 °F.")
+        zsc = st.columns([1.2, 1.2, 1.6])
+        map_metric = zsc[0].selectbox("Map", ["Cooling", "Heating", "Mean demand"],
+                                      key="zone_sens_metric", help="Colour the zones by cooling "
+                                      "sensitivity (summer AC — the headline), heating sensitivity "
+                                      "(winter), or mean demand.")
+        sens_res = zsc[1].selectbox("Resolution", ["Hourly", "Daily", "Weekly", "Monthly", "Yearly"],
+                                    index=1, key="zone_sens_res", help="Point aggregation for the per-zone "
+                                    "response. Coarse (Monthly/Yearly) may be unfittable → blank.")
+        zs_years = zsc[2].multiselect("Years", yrs, default=yrs, key="zs_years",
+                                      help="Independent year pool for this map — does NOT follow the "
+                                      "scatter's Years selector.")
+        zs_all_m = (sorted(set().union(*[set(_AVAIL[y]) for y in zs_years])) if zs_years
+                    else list(range(1, 13)))
+        zs_mlbls = [MONTHS[m] for m in zs_all_m]
+        zsc2 = st.columns(2)
+        zs_seg = zsc2[0].select_slider("Period — months (drag either handle)", options=zs_mlbls,
+                                       value=(zs_mlbls[0], zs_mlbls[-1]), key="zs_seg",
+                                       help="Restrict the map to a contiguous month window — e.g. Jun→Aug "
+                                       "= summer cooling, Dec→Feb = winter heating.")
+        zs_h = zsc2[1].slider("Time interval — hours (local Central, from → to)", min_value=0,
+                              max_value=23, value=(0, 23), key="zs_hours", help="Double-ended hour-of-day "
+                              "filter (0 = midnight, 23 = 11 pm). e.g. 18→22 = evening peak — see *where* "
+                              "the on-peak heat sensitivity bites.")
+        zs_m_lo, zs_m_hi = zs_all_m[zs_mlbls.index(zs_seg[0])], zs_all_m[zs_mlbls.index(zs_seg[1])]
+        zs_hours = set(range(zs_h[0], zs_h[1] + 1))
+        zs_hours_arg = None if zs_hours == set(range(24)) else zs_hours
+        zs_hr_txt = "all 24 h" if zs_hours_arg is None else f"hours {zs_h[0]:02d}→{zs_h[1]:02d}"
+        zs_mo_txt = ("all cached months" if (zs_m_lo == zs_all_m[0] and zs_m_hi == zs_all_m[-1])
+                     else f"{MONTHS[zs_m_lo]}→{MONTHS[zs_m_hi]}")
+        if not zs_years:
+            st.info("Pick at least one year for the sensitivity map.")
+            ztab = pd.DataFrame()
         else:
-            xref = [pd.Timestamp(dt.date.fromisocalendar(2023, int(k), 1)) for k in curves.index]
-            summer = range(27, 32)                            # ~Jul week-of-year
-        years_sorted = sorted(curves.columns)
-        fig3 = go.Figure()
-        for i, y in enumerate(years_sorted):
-            fig3.add_trace(go.Scatter(x=xref, y=curves[y], mode="lines", name=str(y),
-                                      line=dict(color=COLORS[i % len(COLORS)], width=2.4)))
-        fig3.update_layout(height=380, margin=dict(t=10, b=10),
-                           yaxis_title=f"weather-normalized {znm} demand (GW)",
-                           legend=dict(orientation="h", y=1.02), hovermode="x unified")
-        fig3.update_xaxes(tickformat="%b", dtick="M1")
-        st.plotly_chart(fig3, use_container_width=True)
-        mlab = "per-year quadratic" if method == "poly" else "degree-day model (a + b·CDD + c·HDD)"
-        jul = curves.loc[curves.index.intersection(summer)]   # ~July (peak summer)
-        valid = [y for y in years_sorted if not jul.empty and jul[y].notna().any()]
-        if len(valid) >= 2:
-            y0, y1 = valid[0], valid[-1]                      # earliest/latest year with summer data
-            a, b = float(jul[y0].mean()), float(jul[y1].mean())
-            pct = 100 * (b - a) / a if a else float("nan")
-            st.caption(
-                f"At **normal summer weather**, weather-normalized **{znm}** demand rose **{a:.1f} → "
-                f"{b:.1f} GW** ({y0}→{y1}, **{b - a:+.1f} GW / {pct:+.0f}%**) — pure structural growth "
-                "(weather held constant). The **summer hump = cooling**, the smaller winter rise = "
-                f"heating; the vertical gap each season is the growth. Method: {mlab} fit evaluated at "
-                f"the normal **{wn_interval.lower()}** temperature. This panel has its **own** Zone & "
-                "Interval selectors — independent of the scatter.")
-        else:
-            st.caption(f"{mlab.capitalize()} fit evaluated at the normal {wn_interval.lower()} "
-                       "temperature; weather held constant, so the year-gap is structural growth. "
-                       "Select ≥2 years to read it.")
+            ztab = _zone_sensitivity(sens_res.lower(), sorted(zs_years), zs_m_lo, zs_m_hi, zs_hours_arg)
+            if ztab.empty:
+                st.info("No per-zone data for this window — widen the **Period**/**hours** or add a year "
+                        "(or run `python -m src.backfill_history --force` if columns aren't cached).")
+            else:
+                st.caption(f"Window: **{zs_mo_txt}** · **{zs_hr_txt}** · years "
+                           f"{', '.join(str(y) for y in sorted(zs_years))}.")
+                mcol = {"Cooling": "Cool GW/°F", "Heating": "Heat GW/°F", "Mean demand": "Mean GW"}[map_metric]
+                is_sens = map_metric != "Mean demand"
+                unit = "GW/°F" if is_sens else "GW"
+                vfmt = "{:.2f}" if is_sens else "{:.1f}"
+                zdict = {z: v for z, v in ztab[mcol].items() if v == v}
+                if not zdict:
+                    st.info(f"No **{map_metric}** signal in this window — cooling needs hours ≥ 70 °F, "
+                            "heating needs ≤ 55 °F. Widen the Period/hours or switch the Map metric.")
+                else:
+                    st.plotly_chart(style_fig(build_demand_map(zdict,
+                                    f"{map_metric} sensitivity" if is_sens else map_metric,
+                                    colorbar_title=unit, unit=unit, value_fmt=vfmt, height=470)),
+                                    use_container_width=True)
+
+    # ===================== BOTTOM · 📊 Fitting statistics (all tables, clearly labeled) =====================
+    st.divider()
+    st.subheader("📊 Fitting statistics")
+    st.caption("Each table names the **figure** it belongs to (↳ matches the chart's title/emoji above) "
+               "and the **fit function** behind its numbers, so every stat stays tied to its chart.")
+
+    st.markdown(f"**↳ Load vs temperature** (Row 1, left) — overall fit & coverage · fit function: "
+                f"**{fit_kind}** (R² across all shown points; per-group R² is on the scatter legend).")
+    mc = st.columns(4)
+    mc[0].metric("Points", f"{len(data):,}")
+    mc[1].metric("Temp range", f"{data['temp'].min():.0f}–{data['temp'].max():.0f} °F")
+    mc[2].metric(f"{mlabel} range", f"{data['value'].min():.0f}–{data['value'].max():.0f} GW")
+    fov = ({} if (overlay or not deg) else poly_fit(data["temp"], data["value"], deg))
+    mc[3].metric("Overall R²", f"{fov['r2']:.2f}" if fov else "—",
+                 help="Fit quality across all shown points (per-group R² is in the scatter legend; "
+                      "n/a in overlay since zones have different baselines).")
+
+    if not ztab.empty:
+        st.markdown(f"**↳ 🗺️ Per-zone temperature sensitivity** (map above) — per-zone response "
+                    f"({sens_res.lower()} · {zs_mo_txt} · {zs_hr_txt}) · fit function: **linear arm "
+                    "slopes** — GW per +1 °F + R² on the cooling arm (≥ 70 °F) and heating arm (≤ 55 °F).")
+        order = ztab.sort_values("Cool GW/°F", ascending=False)
+        vmax = float(ztab["Cool GW/°F"].abs().max() or 1.0)
+        sty = (order.style.format({"Mean GW": "{:.1f}", "Cool GW/°F": "{:+.2f}", "Cool R²": "{:.2f}",
+                                   "Heat GW/°F": "{:.2f}", "Heat R²": "{:.2f}"})
+               .map(lambda v: _temp_bg(v, 0, vmax) if pd.notna(v) else "", subset=["Cool GW/°F"]))
+        st.dataframe(sty, use_container_width=True)
+
+    if full_year_table is not None:
+        st.markdown(f"**↳ 📅 ① All selected years** (full-year vs window pair) — per-year fit function: "
+                    f"**{fit_kind}**; columns = R² (both panels), the window's temperature, and the "
+                    "windowed fit at a reference °F.")
+        st.dataframe(full_year_table, use_container_width=True)
+
+    if pair2526_table is not None:
+        st.markdown(f"**↳ 📅 ② 2025 & 2026 only** (full-year vs window pair) — per-year fit function: "
+                    f"**{fit_kind}**; same columns, battery-era years (`Batt −GW removed` = charging "
+                    "stripped from each adjusted year).")
+        st.dataframe(pair2526_table, use_container_width=True)
+
+    if ps_r2_df is not None:
+        st.markdown(f"**↳ 🔬 Per-station fits** (2×4 grid above) — R² per zone × year · fit function: "
+                    f"**{ps_method}**"
+                    + (" (per-zone **Best**, see next table)" if ps_method.startswith("Auto") else "")
+                    + ". Blank = too few points / too flat to fit.")
+        st.dataframe(ps_r2_df, use_container_width=True)
+
+    if ps_cmp_df is not None:
+        st.markdown("**↳ 🔬 Per-station fits** (2×4 grid above) — fit-function comparison: adjusted R² "
+                    "for **Linear / Quadratic / Cubic / Piecewise** per zone; **Best** = the chosen model "
+                    "(used when Method = Auto), **BalPt°F** = the piecewise heating/cooling balance point.")
+        st.dataframe(ps_cmp_df, use_container_width=True)
     st.stop()
 
 # ---- StormVista temperature map: per-county by nearest station (replaces Open-Meteo) ---------
@@ -1553,13 +1587,13 @@ if view in SV_VIEWS:
     di = c[2].slider("Forecast day", 1, len(days), 1, key="svmap_day")
     day = days[di - 1]
     st.subheader(f"① {MARKETS[market]['label']} — {view} · {day}")
-    st.caption("Per-county temperature via each county's **nearest StormVista station** (grid-corrected "
-               "city-extraction); anomaly = forecast high − the **30-yr ERA5 normal**. Red = warmer.")
+    st.caption("Per-county forecast high via the nearest StormVista station; anomaly vs the 30-yr ERA5 "
+               "normal. Red = warmer.")
     try:
         cdf = sv_county_frame(market, day, view, unit, temps, meta, normals)
         map_col, tbl_col = st.columns([2.4, 1])
         with map_col:
-            st.plotly_chart(build_sv_map(cdf, view, unit, market), use_container_width=True)
+            st.plotly_chart(style_fig(build_sv_map(cdf, view, unit, market)), use_container_width=True)
         with tbl_col:
             st.markdown("**Per-zone (county mean)**")
             zt = (cdf.groupby("zone")["value"].mean().round(1).reset_index()
@@ -1580,14 +1614,14 @@ if view in SV_VIEWS:
 else:
     # Open-Meteo lookback / climatology (year-over-year etc.) — needs the ERA5 archive.
     st.subheader(f"① {MARKETS[market]['label']} — {view}")
-    st.caption("Per-county change vs a past date / the 10-yr normal · *now* = NOAA GFS Seamless, "
-               "*reference* = **ERA5 reanalysis** (via Open-Meteo). Red = warmer, blue = cooler.")
+    st.caption("Per-county change vs a past date / 10-yr normal (now = GFS, reference = ERA5). "
+               "Red = warmer, blue = cooler.")
     try:
         cdf, tmeta = load_county_temp(market, view, unit, FORECAST_MODEL)
         is_clim = "clim_years" in tmeta
         map_col, tbl_col = st.columns([2.4, 1])
         with map_col:
-            st.plotly_chart(build_map(cdf, tmeta, market), use_container_width=True)
+            st.plotly_chart(style_fig(build_map(cdf, tmeta, market)), use_container_width=True)
         with tbl_col:
             st.markdown("**Per-zone (county mean)**")
             st.dataframe(zone_table(cdf, tmeta["mode"]), use_container_width=True, hide_index=True)
@@ -1649,16 +1683,12 @@ if zframe is not None and not zframe.empty:
     zdem = (agg / 1000.0).round(2).to_dict()
 if zdem and target is not None:
     mlabel = "peak" if dz_metric == "Peak" else "mean"
-    st.plotly_chart(build_demand_map(zdem, mlabel), use_container_width=True)
+    st.plotly_chart(style_fig(build_demand_map(zdem, mlabel)), use_container_width=True)
     tot = sum(zdem.values())
     top = sorted(zdem.items(), key=lambda kv: -kv[1])[:3]
     st.caption(
-        f"**ERCOT demand by weather zone (GW, daily {mlabel} for {target:%a %b %d}).** Each zone block "
-        f"is coloured by its demand (labelled in GW); total ≈ **{tot:.0f} GW**. Biggest: "
-        + ", ".join(f"**{z} {v:.1f}**" for z, v in top) + ". **Slide the forecast day** to watch the "
-        "demand picture evolve (hotter days light up). Meteologica forecasts each zone's demand from "
-        "*its own* weather, so this is the spatial read of **where the load sits**. Source: Meteologica "
-        "PowerDemand by ERCOT weather zone.")
+        f"**ERCOT demand by weather zone** (GW, daily {mlabel}, {target:%a %b %d}) — total ≈ **{tot:.0f} "
+        "GW**; biggest: " + ", ".join(f"**{z} {v:.1f}**" for z, v in top) + ". Source: Meteologica.")
 
     # full table: every forecast day (rows) × zone (cols), the daily peak/mean demand in GW
     rows = {}
@@ -1678,9 +1708,8 @@ if zdem and target is not None:
         return f"background-color: rgb(255,{int(255 - 150 * t)},{int(255 - 205 * t)})"
     st.dataframe(full_tbl.round(1).style.format("{:.1f}").map(_heat, subset=zcols),
                  use_container_width=True)
-    st.caption(f"Each row = a forecast day ({len(dlist)} days), each column = an ERCOT weather zone "
-               f"(biggest first) + the system **TOTAL**. Values are the day's **{mlabel}** demand. "
-               "The map above shows one row; this is the whole forecast horizon at once.")
+    st.caption(f"Each row = a forecast day ({len(dlist)}), each column = a weather zone (biggest first) + "
+               f"system **TOTAL**; values = daily **{mlabel}** demand.")
 
 st.divider()
 
@@ -1883,22 +1912,15 @@ else:
                                     name=f"{kind.upper()} ({b.model})"))   # fallback if none selected/loaded
     fig_dd.update_layout(height=360, margin=dict(t=10, b=10), yaxis_title=f"{kind.upper()} (°-days)",
                          legend=dict(orientation="h", y=1.02, x=0), hovermode="x unified")
-    st.plotly_chart(fig_dd, use_container_width=True)
+    st.plotly_chart(style_fig(fig_dd), use_container_width=True)
     if skipped:
         st.caption(f"⚠️ No current run for: {', '.join(skipped)} (out-of-season or not in subscription) — skipped.")
     kname = "cooling" if kind == "cdd" else "heating"
     st.caption(
-        f"**Load-weighted ERCOT {kname} degree days** — population-weighted (the standard electricity-load "
-        "proxy). **One coloured line per selected weather model** (its own latest run — pick them in "
-        "**Forecast models**), green = recent actuals, dashed = 30-yr normal, shaded = GEFS p10–p90. "
-        "**Read:** the gap to the normal is the *anomaly* — forecast above normal ⇒ more demand ⇒ bullish "
-        "power/gas burn; **where the models disagree (e.g. GFS vs EC) is the forecast risk** — a wide model "
-        "spread or band ⇒ low confidence, size down. CDD = summer AC, HDD = winter heating; we keep both and "
-        "chart the in-season one (toggle above). Each model shows **its own latest run**, so a line may end a "
-        "day earlier than another (different horizon) — that's not a data gap. Degree days are a *pure "
-        "weather* signal — comparing them to actual burn/net-load isolates the structural (solar + battery) "
-        "drift; see the 🔋 Weather-normalized history dashboard. Source: **StormVista WDD** — GFS / EC / "
-        "GEFS / EPS / GEPS / GFS-BC (`docs/data-sources.md` §8)."
+        f"**Load-weighted ERCOT {kname} degree days** (population-weighted) — one line per selected weather "
+        "model (its own latest run), green = actuals, dashed = 30-yr normal, shaded = GEFS p10–p90. Gap to "
+        "normal = anomaly (above ⇒ more demand); model spread (GFS vs EC) = forecast risk. Source: "
+        "**StormVista WDD**."
     )
 
     # ── Weather → load: pair the forecast weather (degree days OR absolute high temp, both from
@@ -1963,16 +1985,14 @@ else:
         figwl.update_layout(height=320, margin=dict(t=10, b=10),
                             xaxis_title=f"forecast {xname} ({xunit})",
                             yaxis_title="GW (daily mean)", legend=dict(orientation="h", y=1.02, x=0))
-        st.plotly_chart(figwl, use_container_width=True)
+        st.plotly_chart(style_fig(figwl), use_container_width=True)
         s_dem = pair["demand"].cov(pair["x"]) / pair["x"].var()
         s_nl = pair["net_load"].cov(pair["x"]) / pair["x"].var()
         st.caption(
             f"**Weather vs load (forward, next {wl_days} d).** Weather drives **demand** cleanly "
-            f"(**{s_dem:+.2f} GW per {xslope}**, red — hotter ⇒ more AC), but **net load** (blue, "
-            f"what gas actually serves) is far looser (**{s_nl:+.2f} GW per {xslope}**) because "
-            "wind + solar swing it — the vertical gap between the clouds *is* renewable generation. "
-            "**Read:** a hot day only means high burn if it's *also* calm/cloudy. Axis toggle: "
-            "degree days vs **absolute high °F** (both StormVista, load-weighted).")
+            f"(**{s_dem:+.2f} GW per {xslope}**, red), but **net load** (blue) is looser "
+            f"(**{s_nl:+.2f} GW per {xslope}**) — wind + solar swing it; the gap = renewable generation. "
+            "A hot day only means high burn if it's also calm/cloudy.")
     else:
         st.caption("Weather-vs-load pairing unavailable — net-load forecast not loaded (Meteologica "
                    "may be rate-limited), or no StormVista temperature for the High-°F axis.")
@@ -1995,16 +2015,12 @@ else:
             f"📐 **Which model is the demand tracking?** **{best}** fits the Meteologica demand best "
             f"(R²={float(table.loc[best, 'R²']):.2f})" +
             (f"; **GFS** only R²={gfs_r2:.2f}" if gfs_r2 == gfs_r2 else "") +
-            f" — the demand forecast is **ECMWF-driven**, so the weather axis defaults to **{best}**." + bridge)
+            f" — demand is **ECMWF-driven**, axis defaults to **{best}**." + bridge)
         with st.expander(f"Per-model R²: forward {kind.upper()} vs the Meteologica demand forecast"):
             st.dataframe(table, use_container_width=True)
-            st.caption("**R²** = how well each weather model's forecast CDD explains Meteologica's demand "
-                       "forecast over the overlap window — high (EC/EPS) = the model the demand tracks, low "
-                       "(GFS) = weakly related (Meteologica runs on ECMWF). **GW/°-day** is that model's "
-                       "*forward* slope (noisy on a ~2-week window — the bridge above instead uses the "
-                       "robust **historical** sensitivity, rescaled to StormVista pop-weighted CDD units). "
-                       "**Use:** trade the demand off EC weather; read **GFS-vs-EC divergence as "
-                       "demand-revision risk.**")
+            st.caption("**R²** = how well each model's forecast CDD explains Meteologica's demand over the "
+                       "overlap window — high (EC/EPS) = the model the demand tracks, low (GFS) = weakly "
+                       "related. **Use:** trade demand off EC weather; GFS-vs-EC divergence = revision risk.")
             # drill-down: a picked forecast day's HOURLY demand profile + load-weighted hourly temperature
             try:
                 _nlh, _ = load_netload()
@@ -2042,12 +2058,10 @@ else:
                 fh.update_layout(height=270, margin=dict(t=10, b=10),
                                  yaxis=dict(title="demand (GW)", color="#d6604d"),
                                  legend=dict(orientation="h", y=1.02, x=0), hovermode="x unified")
-                st.plotly_chart(fh, use_container_width=True)
-                st.caption(f"Hourly **Meteologica demand** for **{fday}** — the intraday shape behind that "
-                           "day's daily-mean point in the scatter, with the day's **load-weighted "
-                           "temperature** (StormVista 3-hourly, right axis). The **demand peak lags the temp "
-                           "peak** (thermal mass + evening occupancy) — the daily mean (one scatter point) "
-                           "hides that; this is where the actual MW (and the scarcity hour) sit.")
+                st.plotly_chart(style_fig(fh), use_container_width=True)
+                st.caption(f"Hourly **Meteologica demand** for **{fday}** vs load-weighted temperature "
+                           "(right axis) — the demand peak lags the temp peak (thermal mass + evening "
+                           "occupancy), hidden by the daily-mean scatter point.")
 
     # ── sub-daily / hourly: intraday ERCOT temperature (StormVista, 3 h) per station + hourly load
     st.markdown("**Hourly / sub-daily** — intraday **temperature (red/solid, left °F)** vs "
@@ -2096,16 +2110,11 @@ else:
         figh.update_layout(height=340, margin=dict(t=10, b=10),
                            yaxis=dict(title="temperature (°F)", color="#d6604d"),
                            legend=dict(orientation="h", y=1.02, x=0), hovermode="x unified")
-        st.plotly_chart(figh, use_container_width=True)
+        st.plotly_chart(style_fig(figh), use_container_width=True)
         st.caption(
-            "**What the lines are:** the **solid line(s) = the 3-hourly temperature forecast (°F, left "
-            "axis)** for the station(s) you pick — default is the **load-weighted ERCOT average** "
-            "(red). The **blue dotted line = whole-ERCOT net load (GW, right axis)** — the Meteologica "
-            "**system total**, *not* a single station. So the matched comparison is load-weighted "
-            "ERCOT temp vs ERCOT net load; add a city (Houston/Dallas) to see its own swing. The point "
-            "is the **intraday shape** — temperature peaks mid-afternoon, net load ramps into the "
-            "evening as solar fades (daily degree days flatten this away). Temp = StormVista "
-            "per-station city-extraction; net load = Meteologica. Times in CPT.")
+            "**Solid line(s)** = 3-hourly temperature forecast (°F, left) for the picked station(s) — "
+            "default load-weighted ERCOT (red). **Blue dotted** = whole-ERCOT net load (GW, right). "
+            "Temp peaks mid-afternoon, net load ramps into the evening as solar fades. Times in CPT.")
     elif stmat is not None:
         st.caption("Sub-daily temperature: empty for the latest run.")
 
@@ -2155,7 +2164,7 @@ fig.add_trace(go.Scatter(x=view_nl.index, y=view_nl["net_load"], line=dict(color
                          name="net load (Meteologica)"))
 fig.update_layout(height=400, margin=dict(t=10, b=10), yaxis_title="MW",
                   legend=dict(orientation="h", y=1.02, x=0), hovermode="x unified")
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(style_fig(fig), use_container_width=True)
 
 # ---- Implied power-sector gas burn (the weather → power → NG bridge) ----
 st.subheader("Implied power-sector gas burn (ERCOT)")
@@ -2205,13 +2214,7 @@ gb.add_trace(go.Scatter(x=burn.index, y=burn, line=dict(color="#7f3b08", width=2
                         name="implied burn forecast (Meteologica)"))
 gb.update_layout(height=380, margin=dict(t=10, b=10), yaxis_title="Bcf/d",
                  legend=dict(orientation="h", y=1.02, x=0), hovermode="x unified")
-st.plotly_chart(gb, use_container_width=True)
-_actual_note = (" · **green = actual gas burn (EIA-930)** for the recent past — measured gas "
-                "generation × heat rate, *no baseload assumption*, so you can see forecast vs actual."
-                if actual is not None else
-                " · set `EIA_API_KEY` in .env to overlay actual gas burn (EIA-930).")
-st.caption(f"Implied (forecast) burn = max(net load − {baseload_gw:.0f} GW must-run, 0) × {heat_rate:.1f} "
-           f"MMBtu/MWh → Bcf/d{_actual_note} · high net load / low wind → more burn (bullish NG + power).")
+st.plotly_chart(style_fig(gb), use_container_width=True)
 
 # ---- ERCOT demand forecast — multi-model overlay (Meteologica weather-model variants), per zone ----
 st.subheader("ERCOT demand forecast — multi-model (Meteologica)")
@@ -2251,21 +2254,7 @@ else:
                                   line=dict(color=DEMAND_MODEL_COLOR[lab], width=2.2)))
     figd.update_layout(height=380, margin=dict(t=10, b=10), yaxis_title=f"{dm_zone} demand (MW)",
                        legend=dict(orientation="h", y=1.02, x=0), hovermode="x unified")
-    st.plotly_chart(figd, use_container_width=True)
-    cen_df = pd.DataFrame({lab: dm[lab][0] for lab in dm}).dropna()
-    spread_txt = ""
-    if cen_df.shape[0] and cen_df.shape[1] >= 2:
-        sp = cen_df.max(axis=1) - cen_df.min(axis=1)
-        span = max((cen_df.index.max() - cen_df.index.min()).days, 1)
-        spread_txt = (f" Over the common (~{span}-day) window the **cross-model spread averages "
-                      f"{sp.mean():,.0f} MW** (peak {sp.max():,.0f} MW) — **demand-forecast model risk**.")
-    st.caption(
-        f"Each line = ERCOT **{zone_txt}** demand forecast under a different weather-model variant — "
-        "**Meteologica** (own blend / best central estimate), **ECMWF-ENS** (~6 d) and **ECMWF-ENSEXT** "
-        "(**~6-week sub-seasonal**). Toggle each above; **± ensemble band** shades the p10–p90 across the "
-        f"ECMWF members.{spread_txt} **Read:** where the models diverge is demand-forecast risk; the "
-        "**ENSEXT** line is the forward **sub-seasonal demand outlook** (much longer than the ③ weather "
-        "horizon). Source: Meteologica (`docs/data-sources.md`).")
+    st.plotly_chart(style_fig(figd), use_container_width=True)
 
     # ── where do the demand models disagree, zone by zone? (opt-in — loads all 8 zones × 3 models) ──
     if st.toggle("📊 Spread by zone — where the demand models disagree", value=False, key="dm_spread_zone"):
@@ -2281,7 +2270,7 @@ else:
             bar.update_layout(height=300, margin=dict(t=10, b=10), barmode="group",
                               yaxis_title="cross-model demand spread (MW)",
                               legend=dict(orientation="h", y=1.02, x=0))
-            st.plotly_chart(bar, use_container_width=True)
+            st.plotly_chart(style_fig(bar), use_container_width=True)
             top = order[0]
             st.caption(
                 f"**Where the demand models disagree most** — cross-model spread (max−min of the 3 models' "
