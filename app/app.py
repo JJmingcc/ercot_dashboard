@@ -272,6 +272,40 @@ def load_zone_demand_frame():
     return dem.tz_convert(DISPLAY_TZ)
 
 
+@st.cache_data(ttl=1800, show_spinner="Loading per-zone demand by model…")
+def load_zone_demand_model(model: str):
+    """Hourly per-zone ERCOT demand (MW, local tz) under one weather-model variant — columns = the 8
+    zone display names. model='Ensemble' → the mean across the available models. None if unavailable.
+    Reuses the multi-model catalog so each zone is pulled for the chosen model (or every model)."""
+    cat = demand_model_catalog()
+    if not cat:
+        return None
+    from src.meteologica_client import MeteologicaClient
+    from src.parsing import parse_data, central_column
+    try:
+        client = MeteologicaClient()
+    except Exception:
+        return None
+    models = list(DEMAND_MODELS) if model == "Ensemble" else [model]
+    out: dict = {}
+    for zlabel, region in DEMAND_ZONE_REGION.items():
+        if zlabel == "Whole ERCOT":                          # the map is per weather zone, not the system
+            continue
+        series = []
+        for m in models:
+            cid = cat.get(m, {}).get(region)
+            if cid is None:
+                continue
+            try:
+                f = parse_data(client.get_content_data(cid)).frame.tz_convert(DISPLAY_TZ)
+                series.append(f[central_column(f)].dropna())
+            except Exception:
+                continue
+        if series:
+            out[zlabel] = pd.concat(series, axis=1).mean(axis=1) if len(series) > 1 else series[0]
+    return pd.DataFrame(out) if out else None
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def hist_panel(year: int, months: tuple) -> pd.DataFrame:
     """Cached read of a year's ERCOT history panel (parquet) — reused across the Load-vs-temperature
@@ -436,17 +470,45 @@ DIVERGING = [[0.0, "#2166ac"], [0.15, "#4393c3"], [0.35, "#92c5de"], [0.5, "#f7f
              [0.65, "#f4a582"], [0.85, "#d6604d"], [1.0, "#b2182b"]]
 
 
-def _zone_city_labels(cdf: pd.DataFrame, zones: dict, unit: str, valcol: str = "value") -> list:
-    """Map labels 'City<br><temp>°' — the city of each zone (from the zones table) + that zone's mean
-    `valcol` in cdf (the temperature of that city). Falls back to the city name alone with no value."""
+def _zone_city_labels(cdf: pd.DataFrame, zones: dict, unit: str, valcol: str = "value",
+                      with_zone: bool = False) -> list:
+    """Per-zone map label: the zone's city (from the zones table) + that zone's mean `valcol` in cdf
+    (the temperature of that city). with_zone=True prepends the **zone name** ('Zone<br>City temp');
+    else 'City<br>temp'. Falls back to the name(s) alone when no value."""
     zmean = (cdf.groupby("zone")[valcol].mean()
              if ("zone" in cdf.columns and valcol in cdf.columns) else pd.Series(dtype=float))
     out = []
     for z, v in zones.items():
         city = v[2] if len(v) > 2 else z
         t = zmean.get(z)
-        out.append(f"{city}<br>{t:.0f}{unit}" if (t is not None and t == t) else city)
+        tstr = f"{t:.0f}{unit}" if (t is not None and t == t) else None
+        if with_zone:
+            out.append(f"{z}<br>{city}" + (f" {tstr}" if tstr else ""))
+        else:
+            out.append(city + (f"<br>{tstr}" if tstr else ""))
     return out
+
+
+def _sv_station_labels(cdf: pd.DataFrame, meta: pd.DataFrame, unit: str):
+    """City+temp text labels at each StormVista station present in cdf (e.g. San Antonio, El Paso) —
+    extra granularity beyond the zone centroids, works for any ISO market. Returns a [lat, lon, label]
+    frame, or None if the station metadata lacks coordinates (the map then just shows zone names)."""
+    try:
+        cols = {str(c).strip().lower(): c for c in meta.columns}
+        latc = cols.get("latitude") or cols.get("lat")
+        lonc = cols.get("longitude") or cols.get("lon")
+        stnc, namec = cols.get("station"), cols.get("name")
+        if not (latc and lonc and stnc) or "station" not in cdf.columns or "value" not in cdf.columns:
+            return None
+        g = (cdf.dropna(subset=["value"]).groupby("station", as_index=False)["value"].mean()
+             .merge(meta, left_on="station", right_on=stnc, how="inner"))
+        if g.empty:
+            return None
+        nm = g[namec].astype(str) if namec else g["station"].astype(str)
+        g = g.assign(label=nm + "<br>" + g["value"].round().astype(int).astype(str) + unit)
+        return g[[latc, lonc, "label"]].rename(columns={latc: "lat", lonc: "lon"})
+    except Exception:
+        return None
 
 
 def build_map(cdf: pd.DataFrame, meta: dict, market: str) -> go.Figure:
@@ -475,7 +537,7 @@ def build_map(cdf: pd.DataFrame, meta: dict, market: str) -> go.Figure:
     fig.add_trace(go.Scattergeo(lat=olats, lon=olons, mode="lines",
                   line=dict(width=1.8, color="#000"), hoverinfo="skip", showlegend=False))
     zs = MARKETS[market]["zones"]
-    labels = _zone_city_labels(cdf, zs, unit, "now" if mode == "diff" else "value")
+    labels = _zone_city_labels(cdf, zs, unit, "now" if mode == "diff" else "value", with_zone=True)
     fig.add_trace(go.Scattergeo(
         lat=[v[0] for v in zs.values()], lon=[v[1] for v in zs.values()], text=labels,
         mode="text", textfont=dict(size=10, color="#000", family="Arial Black"),
@@ -508,11 +570,15 @@ def build_demand_map(zone_demand: dict, metric_label: str, *, colorbar_title: st
     olats, olons = zone_outline("ERCOT")
     fig.add_trace(go.Scattergeo(lat=olats, lon=olons, mode="lines",
                   line=dict(width=1.8, color="#000"), hoverinfo="skip", showlegend=False))
-    labels = [f"{z}<br>{value_fmt.format(zone_demand[z]) if zone_demand.get(z) == zone_demand.get(z) and z in zone_demand else '—'}"
-              for z in zones]
+    labels = []
+    for z in zones:
+        city = zones[z][2] if len(zones[z]) > 2 else ""
+        v = zone_demand.get(z)
+        vs = value_fmt.format(v) if (z in zone_demand and v == v) else "—"
+        labels.append(f"{z} ({city})<br>{vs}" if city else f"{z}<br>{vs}")
     fig.add_trace(go.Scattergeo(
         lat=[v[0] for v in zones.values()], lon=[v[1] for v in zones.values()], text=labels,
-        mode="text", textfont=dict(size=11, color="#000", family="Arial Black"),
+        mode="text", textfont=dict(size=10, color="#000", family="Arial Black"),
         hoverinfo="skip", showlegend=False))
     fig.update_geos(scope="usa", resolution=110, showsubunits=True, subunitcolor="#000",
                     subunitwidth=1.1, showcountries=True, countrycolor="#000",
@@ -1564,7 +1630,7 @@ def sv_county_frame(market: str, day: str, view: str, unit: str,
     return pd.DataFrame(rows, columns=["fips", "zone", "station", "value"])
 
 
-def build_sv_map(cdf: pd.DataFrame, view: str, unit: str, market: str) -> go.Figure:
+def build_sv_map(cdf: pd.DataFrame, view: str, unit: str, market: str, station_labels=None) -> go.Figure:
     """Per-county choropleth of the StormVista value (high/low = Turbo, anomaly = diverging)."""
     counties = counties_geojson()
     if view.startswith("Anomaly"):
@@ -1582,10 +1648,14 @@ def build_sv_map(cdf: pd.DataFrame, view: str, unit: str, market: str) -> go.Fig
     fig.add_trace(go.Scattergeo(lat=olats, lon=olons, mode="lines",
                   line=dict(width=1.6, color="#000"), hoverinfo="skip", showlegend=False))
     zs = MARKETS[market]["zones"]
-    labels = _zone_city_labels(cdf, zs, unit, "value")
     fig.add_trace(go.Scattergeo(lat=[v[0] for v in zs.values()], lon=[v[1] for v in zs.values()],
-                  text=labels, mode="text", textfont=dict(size=10, color="#000", family="Arial Black"),
-                  hoverinfo="skip", showlegend=False))
+                  text=list(zs.keys()), mode="text",
+                  textfont=dict(size=11, color="#000", family="Arial Black"),
+                  hoverinfo="skip", showlegend=False))                         # zone names
+    if station_labels is not None and not station_labels.empty:               # city + temp per station
+        fig.add_trace(go.Scattergeo(lat=station_labels["lat"], lon=station_labels["lon"],
+                      text=station_labels["label"], mode="text",
+                      textfont=dict(size=8, color="#111"), hoverinfo="skip", showlegend=False))
     fig.update_geos(scope="usa", resolution=110, showsubunits=True, subunitcolor="#000",
                     subunitwidth=1.0, showcountries=True, countrycolor="#000",
                     center=dict(lat=MARKETS[market]["center"][0], lon=MARKETS[market]["center"][1]),
@@ -1622,9 +1692,11 @@ if view in SV_VIEWS:
                "normal. Red = warmer.")
     try:
         cdf = sv_county_frame(market, day, view, unit, temps, meta, normals)
+        stn_lab = _sv_station_labels(cdf, meta, unit)
         map_col, tbl_col = st.columns([2.4, 1])
         with map_col:
-            st.plotly_chart(style_fig(build_sv_map(cdf, view, unit, market)), use_container_width=True)
+            st.plotly_chart(style_fig(build_sv_map(cdf, view, unit, market, station_labels=stn_lab)),
+                            use_container_width=True)
         with tbl_col:
             st.markdown("**Per-zone (county mean)**")
             zt = (cdf.groupby("zone")["value"].mean().round(1).reset_index()
@@ -1685,11 +1757,16 @@ else:
 
 # ---- Per-zone demand (spatial) — the weather-driven demand value by ERCOT zone ----
 st.subheader("🗺️ ERCOT forecast demand by zone")
-zc = st.columns([1, 1.6, 3])
+zc = st.columns([1, 1.4, 1.6])
 dz_metric = zc[0].radio("Demand", ["Peak", "Mean"], horizontal=True,
                         help="That day's peak (what the desk quotes) or its daily-mean demand.")
+dz_model = zc[1].selectbox("Forecast model", list(DEMAND_MODELS) + ["Ensemble"], index=0,
+                           key="zonedemand_model",
+                           help="Weather-model variant behind the zone demand forecast — "
+                           + " · ".join(f"{m} = {DEMAND_MODEL_DESC[m]}" for m in DEMAND_MODELS)
+                           + " · Ensemble = mean of the available models.")
 try:
-    zframe = load_zone_demand_frame()
+    zframe = load_zone_demand_model(dz_model)
 except Exception as exc:
     zframe = None
     if "DoLogin" in str(exc) or "Too many" in str(exc):
@@ -1703,7 +1780,7 @@ if zframe is not None and not zframe.empty:
     full = [d for d in dates if (zframe.index.date == d).sum() >= 20]  # drop partial first/last days
     dlist = full or dates
     if len(dlist) > 1:
-        di = zc[1].slider("Forecast day ahead", 1, len(dlist), 1, key="zonedemand_day",
+        di = zc[2].slider("Forecast day ahead", 1, len(dlist), 1, key="zonedemand_day",
                           help="Which forecast day to map (1 = the next full day) — slide it to watch "
                                "the demand picture evolve as the weather changes.")
     else:
@@ -1718,8 +1795,9 @@ if zdem and target is not None:
     tot = sum(zdem.values())
     top = sorted(zdem.items(), key=lambda kv: -kv[1])[:3]
     st.caption(
-        f"**ERCOT demand by weather zone** (GW, daily {mlabel}, {target:%a %b %d}) — total ≈ **{tot:.0f} "
-        "GW**; biggest: " + ", ".join(f"**{z} {v:.1f}**" for z, v in top) + ". Source: Meteologica.")
+        f"**ERCOT demand by weather zone** (GW, daily {mlabel}, {target:%a %b %d}, model **{dz_model}**) "
+        f"— total ≈ **{tot:.0f} GW**; biggest: " + ", ".join(f"**{z} {v:.1f}**" for z, v in top)
+        + ". Source: Meteologica.")
 
     # full table: every forecast day (rows) × zone (cols), the daily peak/mean demand in GW
     rows = {}
